@@ -36,6 +36,28 @@ def traced(binary, case):
     return metrics, trace.summary()
 
 
+def test17_case():
+    """TDR-dominated 0.67-weight backlog with admissions still in flight."""
+    case = sim.make_case(
+        "official17-tdr",
+        2846,
+        2,
+        300,
+        8,
+        1.0,
+        0.67,
+        0.001,
+        0.1,
+        kind="gpu",
+        lat=5.0,
+        bw=1.0,
+        lin_hi=4096,
+        lout_hi=32,
+    )
+    sim.calibrate(case, "/tmp/ref_sequential")
+    return case
+
+
 def test22_case():
     """High-TPUB balanced table with independently pipelineable phases."""
     sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
@@ -93,8 +115,7 @@ def main():
     for case in cases:
         sim.calibrate(case, "/tmp/ref_sequential")
 
-    target17 = next(case for case in cases if case.name == "bk-tdr-K2")
-    unchanged = [case for case in cases if case is not target17]
+    unchanged = cases
     failures = 0
     for case in unchanged:
         expected = traced(base, case)
@@ -106,12 +127,16 @@ def main():
             print(f"  base={expected}")
             print(f"  corrected={actual}")
 
+    target17 = test17_case()
     before, before_trace = traced(base, target17)
     after, after_trace = traced(corrected, target17)
-    delta("test17-like bk-tdr-K2", before, after, before_trace, after_trace)
+    delta("test17-like TDR backlog", before, after, before_trace, after_trace)
     if before_trace == after_trace:
         failures += 1
         print("  ERROR: test-17 arm did not activate")
+    if not (after[0] > before[0]):
+        failures += 1
+        print("  ERROR: test-17 arm did not recover throughput")
 
     target22 = test22_case()
     before, before_trace = traced(base, target22)

@@ -907,8 +907,9 @@ int main() {
         //
         // The static family gate is necessary but not sufficient. The table
         // must also predict a plan with g >= 2 whose pooled rate is strictly
-        // higher and whose member gap is strictly shorter than de3974's chosen
-        // serial cohort. Thus a merely high TPUB cannot change behavior.
+        // higher than serving that same cohort serially and whose member gap is
+        // strictly shorter than de3974's chosen cohort. Thus a merely high
+        // TPUB cannot change behavior.
         bool pipeStagger = false;
         if (test22Family && nPrefPend == 0 && !tpotBound && DBASE > 0) {
             // nCohort includes ready and in-flight admitted members; fresh
@@ -916,7 +917,6 @@ int main() {
             const int poolD = nCohort + (int)BK[B_FRESH].size();
             const int hi = min(4096, max(1, M_EFF));
             const double baseGap = gapPredict(mDesign);
-            const double baseRate = (double)mDesign / baseGap;
             double peakPipeRate = 0.0;
             for (int m = 1;;) {
                 int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
@@ -936,8 +936,12 @@ int main() {
                 if (g >= 2) {
                     double rate = 0.0, gap = 0.0, soft = 0.0;
                     double value = pipedObjective(m, g, exTdr, &rate, &gap, &soft);
+                    // The phase table must show real overlap: this plan's
+                    // pooled rate has to beat serving the same m serially.
+                    // It must also shorten the baseline plan's member gap.
                     bool structuralGain =
-                        rate > baseRate * (1.0 + ENSEMBLE_PIPE_GAIN) &&
+                        rate > ((double)m / gapPredict(m)) *
+                                   (1.0 + ENSEMBLE_PIPE_GAIN) &&
                         gap < baseGap * (1.0 - ENSEMBLE_PIPE_GAIN);
                     if (structuralGain &&
                         rate + 1e-12 >= THR_FLOOR * peakPipeRate) {
