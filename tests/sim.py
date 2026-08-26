@@ -35,6 +35,12 @@ class Req:
     st: str = "new"
     tdr: Optional[float] = None
     toks: List[float] = field(default_factory=list)
+    # Input-stage boundary timestamps.  Their differences decompose TDR into
+    # time spent at each resource, including queueing before that resource.
+    ppre_done: Optional[float] = None
+    pup_done: Optional[float] = None
+    pproc_done: Optional[float] = None
+    pdown_done: Optional[float] = None
 
 
 class Col:
@@ -146,6 +152,7 @@ class Sim:
                 if ty == "PRE":
                     rid = int(f[3])
                     r = self.reqs[rid]
+                    r.ppre_done = self.t
                     self.q_up(self.t, r.lin, "PRE", [rid], r.remote)
                     r.st = "up"
                 elif ty == "PROC":
@@ -153,6 +160,7 @@ class Sim:
                     r = self.reqs[rid]
                     r.next_ls = le
                     if le >= self.c.layers:
+                        r.pproc_done = self.t
                         r.st = "down"
                         self.q_down(self.t, r.lin, "PRE", [rid], r.remote)
                     else:
@@ -192,7 +200,12 @@ class Sim:
             for rid in p["rids"]:
                 r = self.reqs[rid]
                 if p["kind"] == "PRE":
-                    r.st = "pproc_ready" if p["dir"] == "UP" else "ppost_ready"
+                    if p["dir"] == "UP":
+                        r.pup_done = self.t
+                        r.st = "pproc_ready"
+                    else:
+                        r.pdown_done = self.t
+                        r.st = "ppost_ready"
                 else:
                     r.st = "dproc_ready" if p["dir"] == "UP" else "dpost_ready"
             ids = " ".join(str(x) for x in p["rids"])
