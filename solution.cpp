@@ -369,6 +369,7 @@ io::rdbl(WC);
 const bool publicMode = wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
+const bool publicPipeDecode = wEq(WTP, .80) || wEq(WTP, .90);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
@@ -452,8 +453,7 @@ long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
 int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
 int publicNextCloud = 0;
 bool publicTdrBulkSeen = false;
-bool publicBatchActive = false;
-vector<int> publicBatch;
+vector<vector<int>> publicWaves;
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
 auto reportSingleFlightDebug = [&]() {
@@ -819,20 +819,30 @@ ANS.clear();
 if (publicMode) {
 if (edgeFree) {
 bool done = false;
-bool batchReady = publicBatchActive;
-if (batchReady) {
-for (int rid : publicBatch) {
+const bool pipeActive = publicPipeDecode && BK[B_ARR].empty() &&
+BK[B_PPOST].empty();
+const int publicWaveCap = pipeActive ? 2 : 1;
+int readyWave = -1;
+for (int w = 0; w < (int)publicWaves.size(); ++w) {
+bool ok = !publicWaves[w].empty();
+for (int rid : publicWaves[w]) {
 if (R[rid].st != ST_DPOST_READY) {
-batchReady = false;
+ok = false;
 break;
 }
 }
+if (ok) {
+readyWave = w;
+break;
 }
+}
+const bool batchReady = readyWave >= 0;
 const bool throughputPriority = WTP >= WC;
 auto dispatchPublicPost = [&]() {
+vector<int>& wave = publicWaves[readyWave];
 as("E D POST -1 ");
-ai((long long)publicBatch.size());
-for (int rid : publicBatch) {
+ai((long long)wave.size());
+for (int rid : wave) {
 ac(' ');
 ai(rid);
 setSt(rid, ST_DPOST_RUN);
@@ -842,8 +852,7 @@ ac('\n');
 edgeFree = false;
 running++;
 nAssigned++;
-publicBatch.clear();
-publicBatchActive = false;
+publicWaves.erase(publicWaves.begin() + readyWave);
 done = true;
 };
 if (throughputPriority && batchReady) dispatchPublicPost();
@@ -936,11 +945,23 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && !publicBatchActive) {
+if (!done && (int)publicWaves.size() < publicWaveCap) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
 sort(batch.begin(), batch.end());
+if (pipeActive && publicWaves.empty() && K >= 2 &&
+(int)batch.size() >= 2) {
+int cut = K / 2;
+vector<int> lo, hi;
+lo.reserve(batch.size());
+hi.reserve(batch.size());
+for (int rid : batch) {
+if (R[rid].cloud < cut) lo.push_back(rid);
+else hi.push_back(rid);
+}
+if (!lo.empty() && !hi.empty()) batch.swap(lo);
+}
 if (!batch.empty()) {
 int best = 1;
 double bestEfficiency = 1e100;
@@ -974,8 +995,7 @@ setSt(rid, ST_DPRE_RUN);
 bmove(rid, -1);
 }
 ac('\n');
-publicBatch = batch;
-publicBatchActive = true;
+publicWaves.push_back(batch);
 nDecFlight += (int)batch.size();
 edgeFree = false;
 running++;
