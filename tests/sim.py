@@ -41,6 +41,14 @@ class Req:
     pup_done: Optional[float] = None
     pproc_done: Optional[float] = None
     pdown_done: Optional[float] = None
+    # Service charged to each input-pipeline stage.  Subtracting these values
+    # from the boundary-to-boundary spans above isolates queueing (including
+    # head-of-line delay on the FIFO links) per request.
+    ppre_service: float = 0.0
+    pup_service: float = 0.0
+    pproc_service: float = 0.0
+    pdown_service: float = 0.0
+    ppost_service: float = 0.0
 
 
 class Col:
@@ -116,13 +124,21 @@ class Sim:
 
     def q_up(self, t, ln, kind, rids, rem):
         st = max(t, self.up_free)
-        self.up_free = st + self.xfer(ln)
+        service = self.xfer(ln)
+        self.up_free = st + service
+        if kind == "PRE":
+            for rid in rids:
+                self.reqs[rid].pup_service += service
         self.push(self.up_free, "XDN",
                   {"dir": "UP", "rem": rem, "size": int(ln * self.c.bpt), "kind": kind, "rids": rids})
 
     def q_down(self, t, ln, kind, rids, rem):
         st = max(t, self.down_free)
-        self.down_free = st + self.xfer(ln)
+        service = self.xfer(ln)
+        self.down_free = st + service
+        if kind == "PRE":
+            for rid in rids:
+                self.reqs[rid].pdown_service += service
         self.push(self.down_free, "XDN",
                   {"dir": "DOWN", "rem": rem, "size": int(ln * self.c.bpt), "kind": kind, "rids": rids})
 
@@ -254,6 +270,11 @@ class Sim:
             self.edge_task = spec
             key = f"{phase} {ty}"
             grp = len(rids) if phase == "D" else 1
+            if phase == "P":
+                if ty == "PRE":
+                    r.ppre_service += S + dur
+                else:
+                    r.ppost_service += S + dur
             st = self.stats[key]
             st[0] += 1
             st[1] += grp
@@ -288,6 +309,8 @@ class Sim:
             self.cloud_task[c] = spec
             key = f"{phase} {ty}"
             grp = len(rids) if phase == "D" else 1
+            if phase == "P":
+                r.pproc_service += S + dur
             st = self.stats[key]
             st[0] += 1
             st[1] += grp

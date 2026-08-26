@@ -11,6 +11,12 @@ import sim
 
 
 STAGES = ("P PRE", "uplink", "P PROC", "downlink", "P POST")
+LENGTH_BUCKETS = (
+    ("<=64", lambda n: n <= 64),
+    ("65-256", lambda n: 64 < n <= 256),
+    ("257-1024", lambda n: 256 < n <= 1024),
+    (">1024", lambda n: n > 1024),
+)
 
 
 def quantile(values, q):
@@ -23,6 +29,16 @@ def request_parts(r):
     if any(x is None for x in points):
         raise RuntimeError(f"request {r.rid} has incomplete TDR timestamps")
     return tuple(b - a for a, b in zip(points, points[1:]))
+
+
+def request_service(r):
+    return (
+        r.ppre_service,
+        r.pup_service,
+        r.pproc_service,
+        r.pdown_service,
+        r.ppost_service,
+    )
 
 
 def official_scale_cases():
@@ -56,22 +72,39 @@ def official_scale_cases():
 def print_case(binary, case):
     metrics, frames, state = sim.run(binary, case)
     rows = [request_parts(r) for r in state.reqs]
+    service = [request_service(r) for r in state.reqs]
     means = [statistics.fmean(row[i] for row in rows) for i in range(len(STAGES))]
     total = sum(means)
     print(
         f"\n{case.name}: R={len(rows)} frames={frames} "
         f"tp={metrics[0]:.6g} mean_tdr={metrics[1]:.3f} tpot={metrics[2]:.3f}"
     )
-    print("stage            mean       share         p50         p95         max")
+    print("stage            mean       queue     service   q-share         p50         p95")
     for i, name in enumerate(STAGES):
         values = [row[i] for row in rows]
+        svc = statistics.fmean(row[i] for row in service)
+        queue = means[i] - svc
         print(
-            f"{name:<9} {means[i]:12.3f} {means[i] / total:10.1%} "
-            f"{quantile(values, .50):11.3f} {quantile(values, .95):11.3f} "
-            f"{max(values):11.3f}"
+            f"{name:<9} {means[i]:12.3f} {queue:11.3f} {svc:11.3f} "
+            f"{queue / means[i] if means[i] else 0:9.1%} "
+            f"{quantile(values, .50):11.3f} {quantile(values, .95):11.3f}"
         )
     error = max(abs(sum(row) - r.tdr) for row, r in zip(rows, state.reqs))
     print(f"sum={total:.3f} decomposition_error={error:.3g}")
+    print("length       n     mean_tdr    mean_queue  " + " ".join(f"{s:>10}" for s in STAGES))
+    for label, predicate in LENGTH_BUCKETS:
+        ids = [i for i, r in enumerate(state.reqs) if predicate(r.lin)]
+        if not ids:
+            continue
+        stage_queue = [
+            statistics.fmean(rows[i][j] - service[i][j] for i in ids)
+            for j in range(len(STAGES))
+        ]
+        mean_tdr = statistics.fmean(sum(rows[i]) for i in ids)
+        print(
+            f"{label:<9} {len(ids):5d} {mean_tdr:12.3f} {sum(stage_queue):12.3f}  "
+            + " ".join(f"{value:10.3f}" for value in stage_queue)
+        )
 
 
 def main():
