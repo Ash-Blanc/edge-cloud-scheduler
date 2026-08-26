@@ -202,11 +202,13 @@ enum : int {
 #ifndef TPOT_CHUNK_SLACK
 #define TPOT_CHUNK_SLACK 1.0
 #endif
-// Steering round time spends TDR headroom, and the TDR consequence of the trade
-// shows up well after the decision, so require mean TDR to be comfortably
-// inside SLO1 rather than merely inside it.
-#ifndef TPOT_TDR_ROOM
-#define TPOT_TDR_ROOM 0.5
+// Steering round time trades TPOT excess down for TDR excess up, and dist is
+// the Euclidean norm of the two, so the trade pays exactly while the TPOT leg
+// is the longer one: d(dist) = (e_tdr*de_tdr + e_tpot*de_tpot)/dist. Requiring
+// the TPOT leg to lead by this factor is the whole condition -- there is no
+// absolute TDR budget to set, only which leg dominates the gradient.
+#ifndef TPOT_DOM
+#define TPOT_DOM 1.0
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
@@ -781,9 +783,15 @@ int main() {
             // gaps to measure, and a test that waits for one can never fire in
             // time to choose the cohort that would have avoided it. Whether
             // round time is worth steering is a question about the size we are
-            // about to run, which is what exAt answers. Affordability, by
-            // contrast, is a measured question -- hence estTdr.
-            tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
+            // about to run, which is what exAt answers. The TDR leg, by
+            // contrast, is a measured quantity with no such blind spot.
+            //
+            // Note what the comparison is not: it is not "TDR is inside SLO1".
+            // A test can sit over SLO1 and still have almost all of its dist in
+            // the TPOT leg, and there the trade is overwhelmingly profitable
+            // even though no TDR budget is left in absolute terms. Only the
+            // ratio of the legs decides.
+            tpotBound = WC > 1e-9 && exAt > TPOT_DOM * exTdr &&
                         WC * ncAt >= WTP * ntpCeil;
 
             // The throughput floor is here because starving the cohort also
