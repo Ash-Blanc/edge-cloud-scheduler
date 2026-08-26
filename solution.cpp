@@ -197,34 +197,6 @@ enum : int {
 #ifndef CHUNK_S_FACTOR
 #define CHUNK_S_FACTOR 20.0
 #endif
-// Fraction of a decode round that has to be fixed link latency before the
-// cohort is worth protecting from fragmentation.
-#ifndef FRAG_LAT_SHARE
-#define FRAG_LAT_SHARE 0.5
-#endif
-// The cloud pool is sized from a capacity ratio, so it needs the headroom any
-// shared resource needs: a pool loaded to exactly 100% queues without bound.
-// This is the reciprocal of the utilisation it is sized for.
-#ifndef KUSE_MARGIN
-#define KUSE_MARGIN 1.08
-#endif
-// Fraction of a decode round's free window on a cloud that a prefill piece may
-// occupy, in the regime where the waiting-time term is what is being scored.
-#ifndef TPOT_CHUNK_SLACK
-#define TPOT_CHUNK_SLACK 1.0
-#endif
-// Official A/B evidence shows that throughput machinery added after d89134d
-// overrides the latency controller on tests where throughput is at most 30% of
-// the score. At and below that observed boundary the d89134d controller owns
-// cohort sizing, admission, cloud choice and firing.
-#ifndef LATENCY_WEIGHT_CUTOFF
-#define LATENCY_WEIGHT_CUTOFF 0.30
-#endif
-// The legacy latency controller spends throughput on TPOT only while measured
-// TDR still has substantial room. Keep its original threshold exactly.
-#ifndef TPOT_TDR_ROOM
-#define TPOT_TDR_ROOM 0.5
-#endif
 // Steering round time trades TPOT excess down for TDR excess up, and dist is
 // the Euclidean norm of the two, so the trade pays exactly while the TPOT leg
 // is the longer one: d(dist) = (e_tdr*de_tdr + e_tpot*de_tpot)/dist. Requiring
@@ -232,43 +204,6 @@ enum : int {
 // absolute TDR budget to set, only which leg dominates the gradient.
 #ifndef TPOT_DOM
 #define TPOT_DOM 1.0
-#endif
-// dist = hypot(eT, eG), so the marginal value of shaving the TPOT leg scales
-// with eG/dist. Once the TDR leg dwarfs it, no TPOT reduction can move dist,
-// and any throughput spent on one is pure loss -- the shape of judge test 17,
-// where mean_tdr/SLO1 ran to ~1554 while the TPOT leg contributed ~25, and
-// capping the cohort cut mean TPOT five-fold for nothing while tp fell 6%.
-// Below this fraction the TPOT-protective policies stand down.
-#ifndef TPOT_DIST_SHARE
-#define TPOT_DIST_SHARE 0.3
-#endif
-// Decode round pipelining: a round is edge -> uplink -> cloud -> downlink, four
-// distinct resources, so g cohorts in antiphase multiply the token rate until
-// one resource saturates (cycle >= g * its phase). 0 disables, 1 engages only
-// while no prefill wants the edge, so the extra D PRE / D POST edge cost can
-// never starve the input stage (per-cloud decode rounds measured -997 when it
-// did).
-#ifndef PIPE_MODE
-#define PIPE_MODE 1
-#endif
-#ifndef PIPE_GCAP
-#define PIPE_GCAP 8
-#endif
-// While the input stage still has requests in flight anywhere (nPrefPend > 0)
-// and the *links* are its binding resource, every decode round bills its fixed
-// k*LAT to the very resource whose drain rate sets the makespan. Rounds are
-// then synchronized: wait for the in-flight round to land and fire one
-// coalesced round instead of trickling. Where the input stage is edge- or
-// cloud-bound the wait would only idle the edge, and once the input stage is
-// drained the trickle is organic pipelining, so the sync stays off there.
-#ifndef PIPE_SYNC_WTP
-#define PIPE_SYNC_WTP 0.3
-#endif
-// Coalesce D POST while cloud groups are still returning also when the edge is
-// the input stage's binding resource: every merged post refunds one S to the
-// resource that sets the makespan.
-#ifndef POST_EDGEBOUND
-#define POST_EDGEBOUND 1
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
@@ -295,32 +230,6 @@ static inline double roundT(int m) {
     return round_time(m);
 }
 
-// Largest single-resource phase of a round of m: the spacing at which staggered
-// cohorts can follow each other before that resource saturates.
-static double phase_max(int m) {
-    if (m < 1) m = 1;
-    int k = min(K, m);
-    double per = ceil((double)m / k);
-    double edge = 2.0 * S + tDpre.get(m) + tDpost.get(m);
-    double link = k * LAT + 8.0 * (double)m * BPT / (BW * 1e6);
-    double proc = S + tDproc.get(per);
-    return max(edge, max(link, proc));
-}
-
-static vector<double> phaseCache;
-static inline double phaseT(int m) {
-    if (m >= 1 && m < (int)phaseCache.size()) return phaseCache[m];
-    return phase_max(m);
-}
-
-// Fraction of a round of m that is fixed link latency. A round pays LAT once
-// per participating cloud in each direction whatever it carries, so this is the
-// part of the round that a larger cohort amortises and a smaller one repeats.
-static inline double latShare(int m) {
-    if (m < 1) m = 1;
-    return 2.0 * min(K, m) * LAT / max(roundT(m), 1e-12);
-}
-
 // Observed gaps, bucketed by the size of the round that produced them.
 //
 // round_time(m) is a hard lower bound on a member's gap at size m: it is the
@@ -345,6 +254,9 @@ static const int GAP_BUCKETS = 14;
 static double gapEw[GAP_BUCKETS];
 static double gapLo[GAP_BUCKETS];  // prefix max of the measured means
 static int gapN[GAP_BUCKETS];
+// Bumped only when an observation actually moves a prediction, so the cohort
+// search downstream can tell whether its inputs have changed.
+static long long gapGen = 0;
 static inline int gapBucket(int m) {
     int b = 0;
     while (b < GAP_BUCKETS - 1 && (2 << b) <= m) ++b;
@@ -352,9 +264,15 @@ static inline int gapBucket(int m) {
 }
 static inline void gapObserve(int m, double g) {
     int b = gapBucket(m);
+    double was = gapEw[b];
+    bool crossed = (gapN[b] < GAP_MINSAMP);
     if (!gapN[b]) gapEw[b] = g;
     else gapEw[b] += (g - gapEw[b]) / (double)min(gapN[b] + 1, (int)GAP_WINDOW);
     ++gapN[b];
+    crossed = crossed && gapN[b] >= GAP_MINSAMP;
+    // The mean converges, so most observations leave every prediction where it
+    // was. Only a move worth acting on is worth telling anyone about.
+    if (!crossed && fabs(gapEw[b] - was) <= 1e-3 * max(1.0, fabs(was))) return;
     // A bigger cohort cannot round-trip faster than a smaller one did under the
     // same interference, so evidence at one size floors every larger size.
     // Without that, a size nobody has tried yet always looks better than the
@@ -364,6 +282,7 @@ static inline void gapObserve(int m, double g) {
         if (gapN[i] >= GAP_MINSAMP && gapEw[i] > run) run = gapEw[i];
         gapLo[i] = run;
     }
+    ++gapGen;
 }
 static inline double gapPredict(int m) {
     int b = gapBucket(m);
@@ -374,40 +293,24 @@ static inline double gapPredict(int m) {
 
 static inline double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
-// The judge's own formula, evaluated on the plan being considered: the decode
-// pool split into g cohorts of m circulating in antiphase. Each member is
-// served once per cycle, so its gap is the cycle, and the pool produces g*m
-// tokens per cycle. g == 1 is exactly the old single-cohort model.
+// The judge's own formula, evaluated on the cohort we are considering.
 //
 // `soft` is the same expression with the clamps removed. Both clamps saturate:
 // once a target is out of reach the real score is flat zero for *every* cohort
 // size, so it cannot say which size comes closest, and a search that maximises
 // it keeps whichever candidate it happened to visit last. The unclamped copy
 // still ranks those tied sizes, so it is used only to break ties.
-static double objective(int m, double ex_tdr, int pool, int gAllow,
-                        double* rateOut = nullptr, double* soft = nullptr) {
-    int g = 1;
-    if (gAllow > 1 && m < pool) {
-        g = pool / m;
-        if (g > gAllow) g = gAllow;
-        if (g < 1) g = 1;
-    }
-    double cyc = roundT(m);
-    if (g > 1) cyc = max(cyc, (double)g * phaseT(m));
-    double toks = (double)m * g;
+static double objective(int m, double ex_tdr, double* soft = nullptr) {
+    double rt = roundT(m);
     double raw_tp = 0.0;
-    if (TPUB > TPBASE) raw_tp = (toks / cyc - TPBASE) / (TPUB - TPBASE);
-    // A member's gap is one full cycle. gapPredict carries the measured
-    // per-size evidence; a staggered plan's cycle is a hard lower bound the
-    // single-size statistic cannot see, so floor the prediction with it.
-    double ex_tpot = max(0.0, (max(gapPredict(m), cyc) - SLO2) / SLO2);
+    if (TPUB > TPBASE) raw_tp = ((double)m / rt - TPBASE) / (TPUB - TPBASE);
+    double ex_tpot = max(0.0, (gapPredict(m) - SLO2) / SLO2);
     double dist = sqrt(ex_tdr * ex_tdr + ex_tpot * ex_tpot);
     double raw_c = (DBASE > 0) ? (1.0 - dist / DBASE) : -dist;
     if (soft) *soft = WTP * raw_tp + WC * raw_c;
     double nc;
     if (DBASE > 0) nc = max(0.0, raw_c);
     else nc = (dist <= 1e-12) ? 1.0 : 0.0;
-    if (rateOut) *rateOut = toks / cyc;
     return WTP * clamp01(raw_tp) + WC * nc;
 }
 
@@ -474,7 +377,6 @@ int main() {
     io::rdbl(DBASE);
     io::rdbl(WTP);
     io::rdbl(WC);
-    const bool legacyLatency = WTP <= LATENCY_WEIGHT_CUTOFF + 1e-12;
 
     io::rint(n_);
     for (long long i = 0; i < n_; ++i) {
@@ -504,11 +406,7 @@ int main() {
 
     const int MAXM = 4097;
     roundCache.resize(MAXM);
-    phaseCache.resize(MAXM);
-    for (int m = 1; m < MAXM; ++m) {
-        roundCache[m] = round_time(m);
-        phaseCache[m] = phase_max(m);
-    }
+    for (int m = 1; m < MAXM; ++m) roundCache[m] = round_time(m);
 
     // Cohort size past which extra members stop paying for themselves.
     int M_EFF = 1, M_FLOOR = 1;
@@ -534,18 +432,6 @@ int main() {
                 M_EFF = m;
                 break;
             }
-        }
-    }
-    // Best reachable norm_tp over the sizes the per-frame scan visits. It only
-    // depends on the static tables, so hoist it out of the frame loop.
-    double NTP_CEIL = 0;
-    if (TPUB > TPBASE) {
-        int hi = min(4096, max(1, M_EFF));
-        for (int m = 1;;) {
-            NTP_CEIL = max(NTP_CEIL,
-                           clamp01(((double)m / roundT(m) - TPBASE) / (TPUB - TPBASE)));
-            if (m >= hi) break;
-            m = min(hi, m + max(1, m / 8));
         }
     }
 
@@ -575,15 +461,17 @@ int main() {
     vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
-    int nLive = 0, nActive = 0, nPrefPend = 0, nDecFlight = 0, nCohort = 0;
+    int nLive = 0, nActive = 0, nPrefPend = 0, nCohort = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
     long long nTdr = 0;
     double sumGap = 0;
     long long nGap = 0;
-    double cloudW = 0, feedW = 0, edgeW = 0, linkW = 0;
 
     vector<int> finBuf, ridBuf, batch;
+    long long searchGen = -1;
+    double searchTdr = -1, searchNtp = 0;
+    int searchM = 1, searchCap = 1 << 30;
 
     auto setSt = [&](int rid, int st) { R[rid].st = st; };
 
@@ -631,12 +519,6 @@ int main() {
                 sumArrPend += now;
                 double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
                 qArr.push(PDI(w, (int)rid));
-                // Capacity of the input stage, used to size the cloud pool.
-                cloudW += S + tPproc.get(r.lin);
-                feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin),
-                             xfer(r.lin));
-                edgeW += 2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin);
-                linkW += xfer(r.lin);
             } else if (e0 == 'F') {  // FIN rid
                 long long rid = 0;
                 io::rint(rid);
@@ -722,7 +604,6 @@ int main() {
                         xfers++;
                         decDown++;
                     } else {  // D POST: one token per member
-                        nDecFlight -= (int)ridBuf.size();
                         int grp = (int)ridBuf.size();
                         for (int rid : ridBuf) {
                             Req& r = R[rid];
@@ -811,38 +692,8 @@ int main() {
         }
         double exTdr = max(0.0, (estTdr - SLO1) / SLO1);
         double exTpot = max(0.0, (estTpot - SLO2) / SLO2);
-        // Measured legs of dist. When the TDR leg dominates, policies that
-        // spend throughput to shorten decode rounds are gated off: they cannot
-        // move dist, only the tp term (see TPOT_DIST_SHARE). Before any gap
-        // has been measured exTpot reads 0, which is absence of evidence rather
-        // than a short TPOT leg -- and that window is when the cohort size for
-        // the run is being settled. The TDR-dominance guard therefore waits
-        // for a real observation; the predicted-leg test below covers the
-        // unmeasured window.
-        bool tdrDominated =
-            !legacyLatency && nGap > 0 && exTpot < TPOT_DIST_SHARE * exTdr;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
-
-        int nAssigned = 0;
-        ANS.clear();
-#ifdef SCHED_TRACE
-        int traceKuse = K;
-        int traceAdmissions = 0;
-#endif
-
-        // ---- edge ----
-        bool edgeBusyNow = !edgeFree;
-        bool prefWork = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
-        // Pipelining engages only while no prefill wants the edge: firing more
-        // rounds then converts an idle edge into token rate, and can never
-        // starve the input stage. dist_base == 0 keeps the single-cohort model
-        // because its SLO2 cap is stated in single-round terms.
-        int poolD = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
-        int gAllow = 1;
-        if (!legacyLatency && PIPE_MODE >= 1 && WTP > 1e-9 && !prefWork &&
-            !(DBASE <= 0 && WC > 1e-9))
-            gAllow = PIPE_GCAP;
 
         // Decode cohort. mDesign is the size the system *wants* to run at; we
         // let requests accumulate towards it and spend the wait on prefill,
@@ -850,19 +701,12 @@ int main() {
         // is optimistic -- real gaps include interleaved prefill and pipeline
         // stalls -- so the objective scores each candidate against the gaps
         // measured at that candidate's own size (see gapPredict).
-        //
-        // The single-cohort plan and the tpotBound regime test always run
-        // first: staggering is a throughput device, and when the score is
-        // owned by the waiting-time term the latency machinery (tpotBound,
-        // the strict admission budget) must keep owning cohort sizing, so a
-        // true tpotBound stands the stagger down before anything downstream
-        // (holdDpost, the fire path) consumes gAllow.
         int mDesign = 1;
-        // Set when the score is dominated by the waiting-time term and the
-        // TPOT half of dist is the longer leg. That is the regime where
-        // trading prefill throughput for shorter decode rounds is the
-        // profitable direction; everywhere else it is not, so the policies
-        // gated on it stay off.
+        // Set when the score is dominated by the waiting-time term, the TPOT
+        // half of it is the part still missing, and TDR has room to spare. That
+        // is the regime where trading prefill throughput for shorter decode
+        // rounds is the profitable direction; everywhere else it is not, so the
+        // policies gated on it stay off.
         //
         // The test is whether the cohort size we have actually settled on is one
         // whose value comes from the w_c term. Before anything is measured that
@@ -871,36 +715,39 @@ int main() {
         // fails, the search moves to the throughput plateau, the w_c term at
         // that size is zero, and the trade stops being made.
         bool tpotBound = false;
+        // Set when the TDR leg is instead the one dominating dist, so capacity
+        // should flow the other way: to prefill, away from decode.
         bool tdrBound = false;
         {
-            double best = -1, bestSoft = -1e300;
-            int mSoft = 1;
-            int hi = min(4096, max(1, M_EFF));
-            // Cheap upper bound first: ncAt <= 1 - exTdr/DBASE whatever the
-            // scan settles on, so when even that cannot outweigh the reachable
-            // throughput term, tpotBound is false for every cohort size and
-            // the single-cohort scan is pure overhead on a stagger frame.
-            double ncUB = (DBASE > 0) ? max(0.0, 1.0 - exTdr / DBASE) : 1.0;
-            // gapPredict is monotone in m, so the largest size the scan visits
-            // also bounds exAt -- which keeps the predicted-leg comparison out
-            // of the scan's way while still letting it veto the scan entirely.
-            double exAtUB = max(0.0, (gapPredict(hi) - SLO2) / SLO2);
-            bool tpotPossible =
-                legacyLatency ||
-                (WC > 1e-9 && exAtUB > TPOT_DOM * exTdr && !tdrDominated &&
-                 WC * ncUB >= WTP * NTP_CEIL);
-            if (gAllow == 1 || tpotPossible) {
+            const int hi = min(4096, max(1, M_EFF));
+            // The scan is the most expensive thing done per frame, and its only
+            // inputs are the gap statistics and the TDR excess. Both are running
+            // means that settle, so re-deriving the same answer on every frame
+            // is the bulk of the scheduler's processor time on a long run: at
+            // the stated limits with a short decode round there are seven
+            // figures of frames, and each was paying for a fresh scan.
+            if (searchGen != gapGen ||
+                fabs(exTdr - searchTdr) > 1e-3 * max(1e-9, searchTdr)) {
+                searchGen = gapGen;
+                searchTdr = exTdr;
+                double best = -1, bestSoft = -1e300;
+                int mSoft = 1;
+                searchM = 1;
+                searchNtp = 0;
                 for (int m = 1;;) {
                     double soft = 0;
-                    double v = objective(m, exTdr, poolD, 1, nullptr, &soft);
+                    double v = objective(m, exTdr, &soft);
                     if (v >= best - 1e-12) {
                         best = max(best, v);
-                        mDesign = m;
+                        searchM = m;
                     }
                     if (soft > bestSoft) {
                         bestSoft = soft;
                         mSoft = m;
                     }
+                    if (TPUB > TPBASE)
+                        searchNtp = max(searchNtp, clamp01(((double)m / roundT(m) - TPBASE) /
+                                                           (TPUB - TPBASE)));
                     if (m >= hi) break;
                     m = min(hi, m + max(1, m / 8));
                 }
@@ -909,132 +756,89 @@ int main() {
                 // size it looked at -- the largest, which is the worst possible
                 // round time. Fall back to the unclamped score, which still
                 // points at the size that comes closest to scoring.
-                if (best <= 1e-12) mDesign = mSoft;
-
-                double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
-                double dAt = sqrt(exTdr * exTdr + exAt * exAt);
-                double ncAt = (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE)
-                                          : (dAt <= 1e-12 ? 1.0 : 0.0);
-                // exAt, not the measured excess: before the first token there
-                // are no gaps to measure, and a test that waits for one can
-                // never fire in time to choose the cohort that would have
-                // avoided it. Whether round time is worth steering is a
-                // question about the size we are about to run, which is what
-                // exAt answers. The TDR leg it is compared against is measured,
-                // which has no such blind spot. Note what the comparison is
-                // not: it is not "TDR is inside SLO1". A test can sit over
-                // SLO1 and still have almost all of its dist in the TPOT leg,
-                // and there the trade is overwhelmingly profitable even
-                // though no TDR budget is left in absolute terms.
-                if (legacyLatency) {
-                    // Exact d89134d ownership test. Neither the later
-                    // predicted-leg shortcut nor TPOT_DIST_SHARE may suppress
-                    // the admission controller before it engages.
-                    tpotBound = WC > 1e-9 && exAt > 0.0 &&
-                                estTdr <= TPOT_TDR_ROOM * SLO1 &&
-                                WC * ncAt >= WTP * NTP_CEIL;
-                } else {
-                    tpotBound = tpotPossible && exAt > TPOT_DOM * exTdr &&
-                                WC * ncAt >= WTP * NTP_CEIL;
-                }
-                if (tpotBound) gAllow = 1;
-            }
-
-            if (gAllow > 1) {
-                // The staggered plan overrides the single-cohort choice. The
-                // fixed M_FLOOR is a single-cohort notion; under pipelining
-                // the same protection is a floor on the pooled token rate.
-                // One pass evaluates every candidate; the rate floor needs the
-                // best pooled rate first, so buffer the values instead of
-                // paying the objective twice.
-                best = -1;
-                bestSoft = -1e300;
-                mSoft = 1;
-                static vector<int> cM;
-                static vector<double> cR, cV, cS;
-                cM.clear(); cR.clear(); cV.clear(); cS.clear();
-                double bestRate = 0;
-                for (int m = 1;;) {
-                    double r, soft = 0;
-                    double v = objective(m, exTdr, poolD, gAllow, &r, &soft);
-                    bestRate = max(bestRate, r);
-                    cM.push_back(m);
-                    cR.push_back(r);
-                    cV.push_back(v);
-                    cS.push_back(soft);
-                    if (m >= hi) break;
-                    m = min(hi, m + max(1, m / 8));
-                }
-                for (size_t i = 0; i < cM.size(); ++i) {
-                    if (cR[i] + 1e-12 >= THR_FLOOR * bestRate) {
-                        if (cV[i] >= best - 1e-12) {
-                            best = max(best, cV[i]);
-                            mDesign = cM[i];
-                        }
-                        if (cS[i] > bestSoft) {
-                            bestSoft = cS[i];
-                            mSoft = cM[i];
-                        }
-                    }
-                }
-                if (best <= 1e-12) mDesign = mSoft;
-            } else {
-                // The throughput floor is here because starving the cohort also
-                // lengthens every queue, which feeds back into TDR and makespan
-                // -- a coupling round_time does not model. That feedback only
-                // threatens a score when TDR has somewhere bad to go, and the
-                // test above already establishes that it does not: TDR is
-                // inside its SLO and the term being scored is the waiting-time
-                // one. Applying the floor anyway overrides the objective before
-                // it can even try the small cohort, which is the only size that
-                // term ever rewards.
-                if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
+                if (best <= 1e-12) searchM = mSoft;
+                // The all-or-nothing branch of the w_c term: with no gradient to
+                // follow, hold the largest size whose round still fits SLO2.
+                searchCap = hi;
                 if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
-                    int cap = 1;
+                    searchCap = 1;
                     for (int m = 1; m <= hi; ++m) {
-                        if (gapPredict(m) <= SLO2) cap = m;
+                        if (gapPredict(m) <= SLO2) searchCap = m;
                         else break;
                     }
-                    mDesign = min(mDesign, cap);
                 }
             }
-        }
-        // Mirror of tpotBound. When the TDR leg is the longer one, the
-        // gradient points at prefill, and every decode task is edge or cloud
-        // time a queued request is waiting behind. Everything here is
-        // measured: starving decode is what makes the TPOT leg grow, and
-        // estTpot counts the gaps still open, so the comparison closes its
-        // own loop. Never both: they prescribe opposite trades, and the
-        // predicted and measured TPOT legs can straddle the TDR leg during a
-        // transient.
-        if (!legacyLatency) {
+            mDesign = searchM;
+            const double ntpCeil = searchNtp;
+
+            double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
+            double dAt = sqrt(exTdr * exTdr + exAt * exAt);
+            double ncAt = (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
+            // exAt, not the measured excess: before the first token there are no
+            // gaps to measure, and a test that waits for one can never fire in
+            // time to choose the cohort that would have avoided it. Whether
+            // round time is worth steering is a question about the size we are
+            // about to run, which is what exAt answers. The TDR leg, by
+            // contrast, is a measured quantity with no such blind spot.
+            //
+            // Note what the comparison is not: it is not "TDR is inside SLO1".
+            // A test can sit over SLO1 and still have almost all of its dist in
+            // the TPOT leg, and there the trade is overwhelmingly profitable
+            // even though no TDR budget is left in absolute terms. Only the
+            // ratio of the legs decides.
+            tpotBound = WC > 1e-9 && exAt > TPOT_DOM * exTdr &&
+                        WC * ncAt >= WTP * ntpCeil;
+            // The same comparison read the other way. When the TDR leg is the
+            // longer one, the gradient points at prefill, and every decode task
+            // is edge or cloud time a queued request is waiting behind. The
+            // trade is the reverse of the one above -- gaps stretch, and the
+            // last token lands later, which is what tp is measured against --
+            // so it is only taken while the w_c term outweighs what the w_tp
+            // term could ever pay, and only while there is prefill to hand the
+            // capacity to.
+            //
+            // Everything here is measured, unlike above. Starving decode is
+            // what makes the TPOT leg grow, and estTpot counts the gaps still
+            // open, so the comparison closes its own loop: the policy runs
+            // until it has spent the slack it was given and then stops firing.
+            // The predicted excess is also the wrong yardstick for how much the
+            // w_c term is currently worth -- a workload of one token per request
+            // has no gap to predict, and asking for one values the term at zero
+            // in precisely the case where all of dist is the TDR leg.
             double dNow = sqrt(exTdr * exTdr + exTpot * exTpot);
             double ncNow = (DBASE > 0) ? max(0.0, 1.0 - dNow / DBASE)
                                        : (dNow <= 1e-12 ? 1.0 : 0.0);
+            // Never both: they prescribe opposite trades, and the predicted and
+            // measured TPOT legs can straddle the TDR leg during a transient.
             tdrBound = !tpotBound && WC > 1e-9 && nPrefPend > 0 &&
                        exTdr > TPOT_DOM * exTpot && ncNow > 0.0 &&
-                       WC * ncNow >= WTP * NTP_CEIL;
+                       WC * ncNow >= WTP * ntpCeil;
+
+            // The throughput floor is here because starving the cohort also
+            // lengthens every queue, which feeds back into TDR and makespan --
+            // a coupling round_time does not model. That feedback only threatens
+            // a score when TDR has somewhere bad to go, and the test above
+            // already establishes that it does not: TDR is inside its SLO and
+            // the term being scored is the waiting-time one. Applying the floor
+            // anyway overrides the objective before it can even try the small
+            // cohort, which is the only size that term ever rewards.
+            if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
+            mDesign = min(mDesign, searchCap);
         }
-        // Which resource the input stage saturates first, from the same request
-        // sums the cloud-pool sizing uses. When it is the edge, every merged
-        // D POST refunds one S to the resource that sets the makespan -- but
-        // only while the edge has prefill to run instead, so holding never
-        // trades an idle edge for the refund. Holding is off entirely while
-        // rounds are deliberately staggered: merging their posts would collapse
-        // the stagger back into one synchronized cohort.
-        bool edgeBoundIn = edgeW * (double)K >= cloudW && edgeW >= linkW;
-        bool holdDpost =
-            edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
-            WTP >= POST_HOLD_WTP && !(DBASE <= 0 && WC > 1e-9) &&
-            (legacyLatency
-                 ? LAT > POST_LAT_RATIO * (S + tDpost.get(1))
-                 : (gAllow <= 1 &&
-                    (LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
-                     (POST_EDGEBOUND && edgeBoundIn && prefWork))));
+
+
+        int nAssigned = 0;
+        ANS.clear();
+
+        // ---- edge ----
+        bool edgeBusyNow = !edgeFree;
         // The edge is one machine, so a decode task there is time a queued
         // request's P PRE or P POST is standing behind. Where the TDR leg is
         // what dist is made of, that ordering is backwards.
-        bool yieldDec = tdrBound && prefWork;
+        bool yieldDec = tdrBound && (!BK[B_PPOST].empty() || !BK[B_ARR].empty());
+        bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
+                         WTP >= POST_HOLD_WTP && LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
+                         !(DBASE <= 0 && WC > 1e-9);
         if (edgeFree && !BK[B_DPOST].empty() && !holdDpost && !yieldDec) {
             batch = BK[B_DPOST];
             sort(batch.begin(), batch.end());
@@ -1070,7 +874,7 @@ int main() {
         if (edgeFree) {
             bool haveAct = !BK[B_ACT].empty();
             bool haveFresh = !BK[B_FRESH].empty();
-            bool havePrefill = prefWork;
+            bool havePrefill = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
             int ready = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size();
 
             // TDR stops at P POST and TPOT only averages gaps *between* tokens,
@@ -1082,33 +886,14 @@ int main() {
             // out of every gap that does get measured. Only the *start* of
             // decoding waits: a cohort already running is never held, since
             // that would stretch the very gaps this is protecting.
-            bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) ||
-                             yieldDec;
+            bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) || yieldDec;
 
             bool fire = false;
             if ((haveAct || haveFresh) && !holdStart) {
-                if (legacyLatency && !havePrefill) {
-                    fire = true;  // d89134d: an otherwise idle edge fires
+                if (!havePrefill) {
+                    fire = true;  // nothing else for the edge to do
                 } else if (ready >= mDesign) {
                     fire = true;  // cohort is as large as it is worth waiting for
-                } else if (!havePrefill) {
-                    // An idle edge is not on its own a reason to fire. Where a
-                    // round is mostly fixed link latency, splitting the cohort
-                    // multiplies the dominant term by the number of pieces, and
-                    // both links are FIFO-shared by every round, so short rounds
-                    // saturate the links while every machine idles. Members still
-                    // inside a round return and enlarge this cohort for nothing
-                    // but makespan, so wait for them -- but only in that regime,
-                    // and only while there is something left to wait for. While
-                    // a link-bound input stage is still feeding, the same holds
-                    // at any latency share: every extra round bills its fixed
-                    // k*LAT to the links whose drain rate sets the makespan, so
-                    // clumps wait and coalesce into one round per return.
-                    bool linkBoundIn = linkW >= edgeW && linkW * (double)K >= cloudW;
-                    bool sync = latShare(ready) >= FRAG_LAT_SHARE ||
-                                (nPrefPend > 0 && linkBoundIn &&
-                                 WTP >= PIPE_SYNC_WTP && !(DBASE <= 0 && WC > 1e-9));
-                    fire = (nDecFlight == 0) || !sync;
                 } else if (haveAct && WC > 1e-9) {
                     // Serving gaps early is only worth it if the batch is not so
                     // small that its per-token edge cost starves everything else.
@@ -1128,54 +913,21 @@ int main() {
                             fire = (rD >= rP);
                         }
                     }
+                    if (meanOpenGap > 8.0 * SLO2) fire = true;  // starvation escape
                 }
-                // Starvation escape: waiting for a bigger cohort is only free
-                // while nothing is being scored, so it can never outlast the
-                // gap budget of a request that already has a token.
-                if (!fire && WC > 1e-9 && meanOpenGap > 8.0 * SLO2 &&
-                    (!legacyLatency || haveAct))
-                    fire = true;
             }
 
             if (fire) {
                 batch.clear();
-                if (gAllow > 1) {
-                    // One round of the plan, not the whole pool: members left
-                    // behind form the next round in antiphase. Longest open gap
-                    // rides first so the stagger stays fair per request.
-                    int seats = mDesign;
-                    if ((int)BK[B_ACT].size() > seats) {
-                        batch = BK[B_ACT];
-                        nth_element(batch.begin(), batch.begin() + seats, batch.end(),
-                                    [&](int a, int b) {
-                                        return R[a].last_tok < R[b].last_tok;
-                                    });
-                        batch.resize(seats);
-                    } else {
-                        batch = BK[B_ACT];
-                    }
-                    int room = seats - (int)batch.size();
-                    for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0;
-                         --i, --room)
-                        batch.push_back(BK[B_FRESH][i]);
-                } else {
-                    for (int rid : BK[B_ACT]) batch.push_back(rid);
-                    // Admitting a request commits it to every later round, so
-                    // the budget has to be spent against everyone already
-                    // admitted -- not against nActive, which ignores members
-                    // whose first token has not landed yet and so lets a whole
-                    // burst of admissions through in the window before it does.
-                    // That strict cap is a TPOT protection bought with
-                    // throughput, so it only applies while the TPOT leg of dist
-                    // is worth buying; where the TDR leg dominates,
-                    // over-admission is free score.
-                    int room =
-                        mDesign -
-                        (legacyLatency ? nCohort : (tdrDominated ? nActive : nCohort));
-                    for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0;
-                         --i, --room)
-                        batch.push_back(BK[B_FRESH][i]);
-                }
+                for (int rid : BK[B_ACT]) batch.push_back(rid);
+                // Admitting a request commits it to every later round, so the
+                // budget has to be spent against everyone already admitted --
+                // not against nActive, which ignores members whose first token
+                // has not landed yet and so lets a whole burst of admissions
+                // through in the window before it does.
+                int room = mDesign - nCohort;
+                for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0; --i, --room)
+                    batch.push_back(BK[B_FRESH][i]);
                 if (!batch.empty()) {
                     sort(batch.begin(), batch.end());
                     as("E D PRE -1 ");
@@ -1187,16 +939,12 @@ int main() {
                             R[rid].joined = 1;
                             nCohort++;
                             if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
-#ifdef SCHED_TRACE
-                            traceAdmissions++;
-#endif
                         }
                         if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                         setSt(rid, ST_DPRE_RUN);
                         bmove(rid, -1);
                     }
                     ac('\n');
-                    nDecFlight += (int)batch.size();
                     edgeFree = false;
                     running++;
                     nAssigned++;
@@ -1239,26 +987,6 @@ int main() {
                 break;
             }
             if (best < 0) best = BK[B_ARR].back();
-            // Every distinct cloud in a decode group costs one link latency in
-            // each direction, every round. Spreading the input stage over more
-            // clouds than it can keep busy therefore buys nothing and is paid
-            // for on every later round, so use only as many clouds as the input
-            // stage's own arrival rate needs -- and only while the latency that
-            // saves outweighs the longer cloud task a denser group implies.
-            int kuse = K;
-            if (!legacyLatency && K > 1 && feedW > 0) {
-                int need = (int)ceil(cloudW / feedW * (double)KUSE_MARGIN);
-                if (need < 1) need = 1;
-                if (need < K) {
-                    double saved = 2.0 * (double)(K - need) * LAT;
-                    double added = tDproc.get(ceil((double)M_EFF / need)) -
-                                   tDproc.get(ceil((double)M_EFF / K));
-                    if (saved > added) kuse = need;
-                }
-            }
-#ifdef SCHED_TRACE
-            traceKuse = kuse;
-#endif
             int c = 0;
             double bl = 1e300;
             // Prefill cannot be preempted, so a piece running on a cloud that a
@@ -1270,11 +998,11 @@ int main() {
             bool avoidDec = tpotBound;
             if (avoidDec) {
                 bool any = false;
-                for (int i = 0; i < kuse; ++i)
+                for (int i = 0; i < K; ++i)
                     if (!nJoinC[i]) any = true;
                 avoidDec = any;
             }
-            for (int i = 0; i < kuse; ++i) {
+            for (int i = 0; i < K; ++i) {
                 if (avoidDec && nJoinC[i]) continue;
                 double load = nPre[i] * (S + tPproc.get(R[best].lin)) +
                               nDec[i] * (S + tDproc.get(max(1, nDec[i])));
@@ -1359,8 +1087,7 @@ int main() {
                 // is the term this regime is not being scored on.
                 if (tpotBound) {
                     int per = max(1, (mDesign + K - 1) / K);
-                    double slack =
-                        TPOT_CHUNK_SLACK * (roundT(mDesign) - (S + tDproc.get(per)));
+                    double slack = roundT(mDesign) - (S + tDproc.get(per));
                     take = max(1, (int)floor(max(slack, perLayer) / max(perLayer, 1e-9)));
                     take = min(take, remain);
                 }
@@ -1416,29 +1143,18 @@ int main() {
                         R[rid].joined = 1;
                         nCohort++;
                         if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
-#ifdef SCHED_TRACE
-                        traceAdmissions++;
-#endif
                     }
                     if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                     setSt(rid, ST_DPRE_RUN);
                     bmove(rid, -1);
                 }
                 ac('\n');
-                nDecFlight += (int)batch.size();
                 edgeFree = false;
                 running++;
                 nAssigned++;
             }
         }
 
-#ifdef SCHED_TRACE
-        fprintf(stderr,
-                "frame=%.9f legacy=%d mDesign=%d gAllow=%d kuse=%d admissions=%d "
-                "cohort=%d active=%d\n",
-                now, legacyLatency ? 1 : 0, mDesign, gAllow, traceKuse,
-                traceAdmissions, nCohort, nActive);
-#endif
         io::oi(nAssigned);
         io::oc('\n');
         io::osn(ANS.data(), ANS.size());

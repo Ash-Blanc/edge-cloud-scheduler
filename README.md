@@ -4,6 +4,20 @@ C++ interactive scheduler for [Codeforces 2251A](https://codeforces.com/contest/
 
 Submit `solution.cpp`.
 
+## Baseline note: throughput-cohort-amortisation work reverted
+
+The throughput-cohort-amortisation / decode-staggering / `kuse` cloud-pool-sizing
+line of work (roughly the commits between `6c6dfdb` and `fdb98d4`, including the
+antiphase-cohort staggering and capacity-based cloud pool sizing described in
+some of the strategy notes below) has been **reverted**. Three real-judge
+submissions showed it regressing hidden tests #3/#4/#8/#9/#10 by roughly 390
+points net, even though the local synthetic suite (`tests/sim.py`) reported it
+as a clear gain. `solution.cpp` is back to the pre-amortisation scheduler that
+scored 14354 on the real judge, and this is the current baseline: any future
+change is judged against real Codeforces submissions first, and the local
+suite is not trusted alone for cross-regime interactions when the two
+disagree.
+
 ## Build and check
 
 ```bash
