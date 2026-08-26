@@ -805,6 +805,130 @@ int main() {
         int gAllow = 1;
         if (PIPE_MODE >= 1 && WTP > 1e-9 && !prefWork && !(DBASE <= 0 && WC > 1e-9))
             gAllow = PIPE_GCAP;
+
+        // Decode cohort. mDesign is the size the system *wants* to run at; we
+        // let requests accumulate towards it and spend the wait on prefill,
+        // which is productive work rather than an idle edge. A modelled round
+        // is optimistic -- real gaps include interleaved prefill and pipeline
+        // stalls -- so the objective scores each candidate against the gaps
+        // measured at that candidate's own size (see gapPredict).
+        //
+        // The single-cohort plan and the tpotBound regime test always run
+        // first: staggering is a throughput device, and when the score is
+        // owned by the waiting-time term the latency machinery (tpotBound,
+        // the strict admission budget) must keep owning cohort sizing, so a
+        // true tpotBound stands the stagger down before anything downstream
+        // (holdDpost, the fire path) consumes gAllow.
+        int mDesign = 1;
+        // Set when the score is dominated by the waiting-time term, the TPOT
+        // half of it is the part still missing, and TDR has room to spare. That
+        // is the regime where trading prefill throughput for shorter decode
+        // rounds is the profitable direction; everywhere else it is not, so the
+        // policies gated on it stay off.
+        //
+        // The test is whether the cohort size we have actually settled on is one
+        // whose value comes from the w_c term. Before anything is measured that
+        // is the small cohort the term rewards, so the trade is made and the
+        // trial runs with these policies in force -- a fair test. If the trial
+        // fails, the search moves to the throughput plateau, the w_c term at
+        // that size is zero, and the trade stops being made.
+        bool tpotBound = false;
+        {
+            double best = -1, bestSoft = -1e300;
+            int mSoft = 1;
+            double ntpCeil = 0;
+            int hi = min(4096, max(1, M_EFF));
+            for (int m = 1;;) {
+                double soft = 0;
+                double v = objective(m, exTdr, poolD, 1, nullptr, &soft);
+                if (v >= best - 1e-12) {
+                    best = max(best, v);
+                    mDesign = m;
+                }
+                if (soft > bestSoft) {
+                    bestSoft = soft;
+                    mSoft = m;
+                }
+                if (TPUB > TPBASE)
+                    ntpCeil = max(ntpCeil, clamp01(((double)m / roundT(m) - TPBASE) /
+                                                   (TPUB - TPBASE)));
+                if (m >= hi) break;
+                m = min(hi, m + max(1, m / 8));
+            }
+            // Every candidate scores exactly zero: the objective has no
+            // gradient at all here, so the loop above just kept the last size
+            // it looked at -- the largest, which is the worst possible round
+            // time. Fall back to the unclamped score, which still points at
+            // the size that comes closest to scoring.
+            if (best <= 1e-12) mDesign = mSoft;
+
+            double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
+            double dAt = sqrt(exTdr * exTdr + exAt * exAt);
+            double ncAt =
+                (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
+            // exAt, not the measured excess: before the first token there are
+            // no gaps to measure, and a test that waits for one can never fire
+            // in time to choose the cohort that would have avoided it. Whether
+            // round time is worth steering is a question about the size we are
+            // about to run, which is what exAt answers. Affordability, by
+            // contrast, is a measured question -- hence estTdr.
+            tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
+                        WC * ncAt >= WTP * ntpCeil && !tdrDominated;
+            if (tpotBound) gAllow = 1;
+
+            if (gAllow > 1) {
+                // The staggered plan overrides the single-cohort choice. The
+                // fixed M_FLOOR is a single-cohort notion; under pipelining
+                // the same protection is a floor on the pooled token rate.
+                best = -1;
+                bestSoft = -1e300;
+                mSoft = 1;
+                double bestRate = 0;
+                for (int m = 1;;) {
+                    double r;
+                    objective(m, exTdr, poolD, gAllow, &r);
+                    bestRate = max(bestRate, r);
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
+                }
+                for (int m = 1;;) {
+                    double r, soft = 0;
+                    double v = objective(m, exTdr, poolD, gAllow, &r, &soft);
+                    if (r + 1e-12 >= THR_FLOOR * bestRate) {
+                        if (v >= best - 1e-12) {
+                            best = max(best, v);
+                            mDesign = m;
+                        }
+                        if (soft > bestSoft) {
+                            bestSoft = soft;
+                            mSoft = m;
+                        }
+                    }
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
+                }
+                if (best <= 1e-12) mDesign = mSoft;
+            } else {
+                // The throughput floor is here because starving the cohort also
+                // lengthens every queue, which feeds back into TDR and makespan
+                // -- a coupling round_time does not model. That feedback only
+                // threatens a score when TDR has somewhere bad to go, and the
+                // test above already establishes that it does not: TDR is
+                // inside its SLO and the term being scored is the waiting-time
+                // one. Applying the floor anyway overrides the objective before
+                // it can even try the small cohort, which is the only size that
+                // term ever rewards.
+                if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
+                if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
+                    int cap = 1;
+                    for (int m = 1; m <= hi; ++m) {
+                        if (gapPredict(m) <= SLO2) cap = m;
+                        else break;
+                    }
+                    mDesign = min(mDesign, cap);
+                }
+            }
+        }
         // Which resource the input stage saturates first, from the same request
         // sums the cloud-pool sizing uses. When it is the edge, every merged
         // D POST refunds one S to the resource that sets the makespan -- but
@@ -848,124 +972,6 @@ int main() {
             edgeFree = false;
             running++;
             nAssigned++;
-        }
-
-        // Decode cohort. mDesign is the size the system *wants* to run at; we
-        // let requests accumulate towards it and spend the wait on prefill,
-        // which is productive work rather than an idle edge. A modelled round
-        // is optimistic -- real gaps include interleaved prefill and pipeline
-        // stalls -- so the objective scores each candidate against the gaps
-        // measured at that candidate's own size (see gapPredict).
-        int mDesign = 1;
-        // Set when the score is dominated by the waiting-time term, the TPOT
-        // half of it is the part still missing, and TDR has room to spare. That
-        // is the regime where trading prefill throughput for shorter decode
-        // rounds is the profitable direction; everywhere else it is not, so the
-        // policies gated on it stay off.
-        //
-        // The test is whether the cohort size we have actually settled on is one
-        // whose value comes from the w_c term. Before anything is measured that
-        // is the small cohort the term rewards, so the trade is made and the
-        // trial runs with these policies in force -- a fair test. If the trial
-        // fails, the search moves to the throughput plateau, the w_c term at
-        // that size is zero, and the trade stops being made.
-        bool tpotBound = false;
-        {
-            double best = -1, bestSoft = -1e300;
-            int mSoft = 1;
-            double ntpCeil = 0;
-            int hi = min(4096, max(1, M_EFF));
-            if (gAllow > 1) {
-                // The fixed M_FLOOR is a single-cohort notion; under pipelining
-                // the same protection is a floor on the pooled token rate.
-                double bestRate = 0;
-                for (int m = 1;;) {
-                    double r;
-                    objective(m, exTdr, poolD, gAllow, &r);
-                    bestRate = max(bestRate, r);
-                    if (m >= hi) break;
-                    m = min(hi, m + max(1, m / 8));
-                }
-                for (int m = 1;;) {
-                    double r, soft = 0;
-                    double v = objective(m, exTdr, poolD, gAllow, &r, &soft);
-                    if (r + 1e-12 >= THR_FLOOR * bestRate) {
-                        if (v >= best - 1e-12) {
-                            best = max(best, v);
-                            mDesign = m;
-                        }
-                        if (soft > bestSoft) {
-                            bestSoft = soft;
-                            mSoft = m;
-                        }
-                    }
-                    if (m >= hi) break;
-                    m = min(hi, m + max(1, m / 8));
-                }
-                if (best <= 1e-12) mDesign = mSoft;
-                // tpotBound stays false here: the stagger regime only engages
-                // while no prefill wants the edge, which is when the policies
-                // tpotBound gates (prefill placement, chunking, hold-start)
-                // have nothing left to act on.
-            } else {
-                for (int m = 1;;) {
-                    double soft = 0;
-                    double v = objective(m, exTdr, poolD, 1, nullptr, &soft);
-                    if (v >= best - 1e-12) {
-                        best = max(best, v);
-                        mDesign = m;
-                    }
-                    if (soft > bestSoft) {
-                        bestSoft = soft;
-                        mSoft = m;
-                    }
-                    if (TPUB > TPBASE)
-                        ntpCeil =
-                            max(ntpCeil, clamp01(((double)m / roundT(m) - TPBASE) /
-                                                 (TPUB - TPBASE)));
-                    if (m >= hi) break;
-                    m = min(hi, m + max(1, m / 8));
-                }
-                // Every candidate scores exactly zero: the objective has no
-                // gradient at all here, so the loop above just kept the last
-                // size it looked at -- the largest, which is the worst possible
-                // round time. Fall back to the unclamped score, which still
-                // points at the size that comes closest to scoring.
-                if (best <= 1e-12) mDesign = mSoft;
-
-                double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
-                double dAt = sqrt(exTdr * exTdr + exAt * exAt);
-                double ncAt =
-                    (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
-                // exAt, not the measured excess: before the first token there
-                // are no gaps to measure, and a test that waits for one can
-                // never fire in time to choose the cohort that would have
-                // avoided it. Whether round time is worth steering is a
-                // question about the size we are about to run, which is what
-                // exAt answers. Affordability, by contrast, is a measured
-                // question -- hence estTdr.
-                tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
-                            WC * ncAt >= WTP * ntpCeil && !tdrDominated;
-
-                // The throughput floor is here because starving the cohort also
-                // lengthens every queue, which feeds back into TDR and makespan
-                // -- a coupling round_time does not model. That feedback only
-                // threatens a score when TDR has somewhere bad to go, and the
-                // test above already establishes that it does not: TDR is
-                // inside its SLO and the term being scored is the waiting-time
-                // one. Applying the floor anyway overrides the objective before
-                // it can even try the small cohort, which is the only size that
-                // term ever rewards.
-                if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
-                if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
-                    int cap = 1;
-                    for (int m = 1; m <= hi; ++m) {
-                        if (gapPredict(m) <= SLO2) cap = m;
-                        else break;
-                    }
-                    mDesign = min(mDesign, cap);
-                }
-            }
         }
 
         if (edgeFree) {
