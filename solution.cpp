@@ -206,7 +206,7 @@ enum : int {
 #define TPOT_DOM 1.0
 #endif
 #ifndef PREFILL_WORKLOAD_WTP
-#define PREFILL_WORKLOAD_WTP 0.15
+#define PREFILL_WORKLOAD_WTP 0.05
 #endif
 #ifndef TDR_UNSPLIT_WTP
 #define TDR_UNSPLIT_WTP 0.15
