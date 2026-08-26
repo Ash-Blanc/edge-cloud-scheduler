@@ -253,7 +253,7 @@ enum : int {
 // last can extend the final pipeline drain.  Within this many final arrivals,
 // reverse the order so the shortest remaining chain is the tail request.
 #ifndef PUBLIC_TDR_TAIL_LPT
-#define PUBLIC_TDR_TAIL_LPT 0
+#define PUBLIC_TDR_TAIL_LPT 16
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
