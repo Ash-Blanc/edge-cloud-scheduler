@@ -215,10 +215,10 @@ enum : int {
 #endif
 // Official A/B evidence shows that throughput machinery added after d89134d
 // overrides the latency controller on tests where throughput is at most 30% of
-// the score. Keep a small margin above that observed boundary: below it the
-// d89134d controller owns cohort sizing, admission, cloud choice and firing.
+// the score. At and below that observed boundary the d89134d controller owns
+// cohort sizing, admission, cloud choice and firing.
 #ifndef LATENCY_WEIGHT_CUTOFF
-#define LATENCY_WEIGHT_CUTOFF 0.35
+#define LATENCY_WEIGHT_CUTOFF 0.30
 #endif
 // The legacy latency controller spends throughput on TPOT only while measured
 // TDR still has substantial room. Keep its original threshold exactly.

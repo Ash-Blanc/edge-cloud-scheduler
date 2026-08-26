@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the weight split against the two scheduler lineages.
 
-For WTP <= 0.35 the corrected binary must emit the same event-by-event
+For WTP <= 0.30 the corrected binary must emit the same event-by-event
 schedule as d89134d. Above the cutoff it must emit the current-main schedule.
 The digest includes every frame timestamp and every assignment command, so a
 match is stronger than matching aggregate metrics or task counters.
@@ -13,7 +13,7 @@ import sys
 import sim
 
 
-CUTOFF = 0.35
+CUTOFF = 0.30
 
 
 class TraceDigest:
