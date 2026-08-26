@@ -687,46 +687,6 @@ int main() {
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
 
-        int nAssigned = 0;
-        ANS.clear();
-
-        // ---- edge ----
-        bool edgeBusyNow = !edgeFree;
-        bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
-                         WTP >= POST_HOLD_WTP && LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
-                         !(DBASE <= 0 && WC > 1e-9);
-        if (edgeFree && !BK[B_DPOST].empty() && !holdDpost) {
-            batch = BK[B_DPOST];
-            sort(batch.begin(), batch.end());
-            as("E D POST -1 ");
-            ai((long long)batch.size());
-            for (int rid : batch) {
-                ac(' ');
-                ai(rid);
-                setSt(rid, ST_DPOST_RUN);
-                bmove(rid, -1);
-            }
-            ac('\n');
-            edgeFree = false;
-            running++;
-            nAssigned++;
-        }
-
-        if (edgeFree && WTP <= PPOST_FIRST_WTP && !BK[B_PPOST].empty()) {
-            int best = BK[B_PPOST][0];
-            double bw = 1e300;
-            for (int rid : BK[B_PPOST]) {
-                double w = tPpost.get(R[rid].lin);
-                if (w < bw) { bw = w; best = rid; }
-            }
-            as("E P POST "); ai(R[best].cloud); ac(' '); ai(best); ac('\n');
-            setSt(best, ST_PPOST_RUN);
-            bmove(best, -1);
-            edgeFree = false;
-            running++;
-            nAssigned++;
-        }
-
         // Decode cohort. mDesign is the size the system *wants* to run at; we
         // let requests accumulate towards it and spend the wait on prefill,
         // which is productive work rather than an idle edge. A modelled round
@@ -747,6 +707,9 @@ int main() {
         // fails, the search moves to the throughput plateau, the w_c term at
         // that size is zero, and the trade stops being made.
         bool tpotBound = false;
+        // Set when the TDR leg is instead the one dominating dist, so capacity
+        // should flow the other way: to prefill, away from decode.
+        bool tdrBound = false;
         {
             double best = -1, bestSoft = -1e300;
             int mSoft = 1;
@@ -793,6 +756,31 @@ int main() {
             // ratio of the legs decides.
             tpotBound = WC > 1e-9 && exAt > TPOT_DOM * exTdr &&
                         WC * ncAt >= WTP * ntpCeil;
+            // The same comparison read the other way. When the TDR leg is the
+            // longer one, the gradient points at prefill, and every decode task
+            // is edge or cloud time a queued request is waiting behind. The
+            // trade is the reverse of the one above -- gaps stretch, and the
+            // last token lands later, which is what tp is measured against --
+            // so it is only taken while the w_c term outweighs what the w_tp
+            // term could ever pay, and only while there is prefill to hand the
+            // capacity to.
+            //
+            // Everything here is measured, unlike above. Starving decode is
+            // what makes the TPOT leg grow, and estTpot counts the gaps still
+            // open, so the comparison closes its own loop: the policy runs
+            // until it has spent the slack it was given and then stops firing.
+            // The predicted excess is also the wrong yardstick for how much the
+            // w_c term is currently worth -- a workload of one token per request
+            // has no gap to predict, and asking for one values the term at zero
+            // in precisely the case where all of dist is the TDR leg.
+            double dNow = sqrt(exTdr * exTdr + exTpot * exTpot);
+            double ncNow = (DBASE > 0) ? max(0.0, 1.0 - dNow / DBASE)
+                                       : (dNow <= 1e-12 ? 1.0 : 0.0);
+            // Never both: they prescribe opposite trades, and the predicted and
+            // measured TPOT legs can straddle the TDR leg during a transient.
+            tdrBound = !tpotBound && WC > 1e-9 && nPrefPend > 0 &&
+                       exTdr > TPOT_DOM * exTpot && ncNow > 0.0 &&
+                       WC * ncNow >= WTP * ntpCeil;
 
             // The throughput floor is here because starving the cohort also
             // lengthens every queue, which feeds back into TDR and makespan --
@@ -813,6 +801,51 @@ int main() {
             }
         }
 
+
+        int nAssigned = 0;
+        ANS.clear();
+
+        // ---- edge ----
+        bool edgeBusyNow = !edgeFree;
+        // The edge is one machine, so a decode task there is time a queued
+        // request's P PRE or P POST is standing behind. Where the TDR leg is
+        // what dist is made of, that ordering is backwards.
+        bool yieldDec = tdrBound && (!BK[B_PPOST].empty() || !BK[B_ARR].empty());
+        bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
+                         WTP >= POST_HOLD_WTP && LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
+                         !(DBASE <= 0 && WC > 1e-9);
+        if (edgeFree && !BK[B_DPOST].empty() && !holdDpost && !yieldDec) {
+            batch = BK[B_DPOST];
+            sort(batch.begin(), batch.end());
+            as("E D POST -1 ");
+            ai((long long)batch.size());
+            for (int rid : batch) {
+                ac(' ');
+                ai(rid);
+                setSt(rid, ST_DPOST_RUN);
+                bmove(rid, -1);
+            }
+            ac('\n');
+            edgeFree = false;
+            running++;
+            nAssigned++;
+        }
+
+        if (edgeFree && WTP <= PPOST_FIRST_WTP && !BK[B_PPOST].empty()) {
+            int best = BK[B_PPOST][0];
+            double bw = 1e300;
+            for (int rid : BK[B_PPOST]) {
+                double w = tPpost.get(R[rid].lin);
+                if (w < bw) { bw = w; best = rid; }
+            }
+            as("E P POST "); ai(R[best].cloud); ac(' '); ai(best); ac('\n');
+            setSt(best, ST_PPOST_RUN);
+            bmove(best, -1);
+            edgeFree = false;
+            running++;
+            nAssigned++;
+        }
+
         if (edgeFree) {
             bool haveAct = !BK[B_ACT].empty();
             bool haveFresh = !BK[B_FRESH].empty();
@@ -828,7 +861,7 @@ int main() {
             // out of every gap that does get measured. Only the *start* of
             // decoding waits: a cohort already running is never held, since
             // that would stretch the very gaps this is protecting.
-            bool holdStart = tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct;
+            bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) || yieldDec;
 
             bool fire = false;
             if ((haveAct || haveFresh) && !holdStart) {
@@ -970,7 +1003,10 @@ int main() {
         // ---- clouds ----
         for (int c = 0; c < K; ++c) {
             if (!cloudFree[c]) continue;
-            if (!BK[B_DPROC + c].empty()) {
+            // Same argument on the cloud side: a queued prefill piece here is
+            // on the critical path of a request whose TDR is still running,
+            // while the decode round it displaces only stretches a gap.
+            if (!BK[B_DPROC + c].empty() && !(tdrBound && !BK[B_PPROC + c].empty())) {
                 batch = BK[B_DPROC + c];
                 sort(batch.begin(), batch.end());
                 as("C");
