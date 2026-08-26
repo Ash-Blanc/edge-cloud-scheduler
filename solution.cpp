@@ -213,11 +213,13 @@ enum : int {
 #ifndef TPOT_CHUNK_SLACK
 #define TPOT_CHUNK_SLACK 1.0
 #endif
-// Steering round time spends TDR headroom, and the TDR consequence of the trade
-// shows up well after the decision, so require mean TDR to be comfortably
-// inside SLO1 rather than merely inside it.
-#ifndef TPOT_TDR_ROOM
-#define TPOT_TDR_ROOM 0.5
+// Steering round time trades TPOT excess down for TDR excess up, and dist is
+// the Euclidean norm of the two, so the trade pays exactly while the TPOT leg
+// is the longer one: d(dist) = (e_tdr*de_tdr + e_tpot*de_tpot)/dist. Requiring
+// the TPOT leg to lead by this factor is the whole condition -- there is no
+// absolute TDR budget to set, only which leg dominates the gradient.
+#ifndef TPOT_DOM
+#define TPOT_DOM 1.0
 #endif
 // dist = hypot(eT, eG), so the marginal value of shaving the TPOT leg scales
 // with eG/dist. Once the TDR leg dwarfs it, no TPOT reduction can move dist,
@@ -798,8 +800,13 @@ int main() {
         double exTpot = max(0.0, (estTpot - SLO2) / SLO2);
         // Measured legs of dist. When the TDR leg dominates, policies that
         // spend throughput to shorten decode rounds are gated off: they cannot
-        // move dist, only the tp term (see TPOT_DIST_SHARE).
-        bool tdrDominated = exTpot < TPOT_DIST_SHARE * exTdr;
+        // move dist, only the tp term (see TPOT_DIST_SHARE). Before any gap
+        // has been measured exTpot reads 0, which is absence of evidence rather
+        // than a short TPOT leg -- and that window is when the cohort size for
+        // the run is being settled. The TDR-dominance guard therefore waits
+        // for a real observation; the predicted-leg test below covers the
+        // unmeasured window.
+        bool tdrDominated = nGap > 0 && exTpot < TPOT_DIST_SHARE * exTdr;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
 
@@ -832,11 +839,11 @@ int main() {
         // true tpotBound stands the stagger down before anything downstream
         // (holdDpost, the fire path) consumes gAllow.
         int mDesign = 1;
-        // Set when the score is dominated by the waiting-time term, the TPOT
-        // half of it is the part still missing, and TDR has room to spare. That
-        // is the regime where trading prefill throughput for shorter decode
-        // rounds is the profitable direction; everywhere else it is not, so the
-        // policies gated on it stay off.
+        // Set when the score is dominated by the waiting-time term and the
+        // TPOT half of dist is the longer leg. That is the regime where
+        // trading prefill throughput for shorter decode rounds is the
+        // profitable direction; everywhere else it is not, so the policies
+        // gated on it stay off.
         //
         // The test is whether the cohort size we have actually settled on is one
         // whose value comes from the w_c term. Before anything is measured that
@@ -845,6 +852,7 @@ int main() {
         // fails, the search moves to the throughput plateau, the w_c term at
         // that size is zero, and the trade stops being made.
         bool tpotBound = false;
+        bool tdrBound = false;
         {
             double best = -1, bestSoft = -1e300;
             int mSoft = 1;
@@ -854,7 +862,11 @@ int main() {
             // throughput term, tpotBound is false for every cohort size and
             // the single-cohort scan is pure overhead on a stagger frame.
             double ncUB = (DBASE > 0) ? max(0.0, 1.0 - exTdr / DBASE) : 1.0;
-            bool tpotPossible = WC > 1e-9 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
+            // gapPredict is monotone in m, so the largest size the scan visits
+            // also bounds exAt -- which keeps the predicted-leg comparison out
+            // of the scan's way while still letting it veto the scan entirely.
+            double exAtUB = max(0.0, (gapPredict(hi) - SLO2) / SLO2);
+            bool tpotPossible = WC > 1e-9 && exAtUB > TPOT_DOM * exTdr &&
                                 !tdrDominated && WC * ncUB >= WTP * NTP_CEIL;
             if (gAllow == 1 || tpotPossible) {
                 for (int m = 1;;) {
@@ -887,9 +899,14 @@ int main() {
                 // never fire in time to choose the cohort that would have
                 // avoided it. Whether round time is worth steering is a
                 // question about the size we are about to run, which is what
-                // exAt answers. Affordability, by contrast, is a measured
-                // question -- hence estTdr.
-                tpotBound = tpotPossible && exAt > 0.0 && WC * ncAt >= WTP * NTP_CEIL;
+                // exAt answers. The TDR leg it is compared against is measured,
+                // which has no such blind spot. Note what the comparison is
+                // not: it is not "TDR is inside SLO1". A test can sit over
+                // SLO1 and still have almost all of its dist in the TPOT leg,
+                // and there the trade is overwhelmingly profitable even
+                // though no TDR budget is left in absolute terms.
+                tpotBound = tpotPossible && exAt > TPOT_DOM * exTdr &&
+                            WC * ncAt >= WTP * NTP_CEIL;
                 if (tpotBound) gAllow = 1;
             }
 
@@ -952,6 +969,22 @@ int main() {
                 }
             }
         }
+        // Mirror of tpotBound. When the TDR leg is the longer one, the
+        // gradient points at prefill, and every decode task is edge or cloud
+        // time a queued request is waiting behind. Everything here is
+        // measured: starving decode is what makes the TPOT leg grow, and
+        // estTpot counts the gaps still open, so the comparison closes its
+        // own loop. Never both: they prescribe opposite trades, and the
+        // predicted and measured TPOT legs can straddle the TDR leg during a
+        // transient.
+        {
+            double dNow = sqrt(exTdr * exTdr + exTpot * exTpot);
+            double ncNow = (DBASE > 0) ? max(0.0, 1.0 - dNow / DBASE)
+                                       : (dNow <= 1e-12 ? 1.0 : 0.0);
+            tdrBound = !tpotBound && WC > 1e-9 && nPrefPend > 0 &&
+                       exTdr > TPOT_DOM * exTpot && ncNow > 0.0 &&
+                       WC * ncNow >= WTP * NTP_CEIL;
+        }
         // Which resource the input stage saturates first, from the same request
         // sums the cloud-pool sizing uses. When it is the edge, every merged
         // D POST refunds one S to the resource that sets the makespan -- but
@@ -965,7 +998,11 @@ int main() {
                          (LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
                           (POST_EDGEBOUND && edgeBoundIn && prefWork)) &&
                          !(DBASE <= 0 && WC > 1e-9);
-        if (edgeFree && !BK[B_DPOST].empty() && !holdDpost) {
+        // The edge is one machine, so a decode task there is time a queued
+        // request's P PRE or P POST is standing behind. Where the TDR leg is
+        // what dist is made of, that ordering is backwards.
+        bool yieldDec = tdrBound && prefWork;
+        if (edgeFree && !BK[B_DPOST].empty() && !holdDpost && !yieldDec) {
             batch = BK[B_DPOST];
             sort(batch.begin(), batch.end());
             as("E D POST -1 ");
@@ -1012,7 +1049,8 @@ int main() {
             // out of every gap that does get measured. Only the *start* of
             // decoding waits: a cohort already running is never held, since
             // that would stretch the very gaps this is protecting.
-            bool holdStart = tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct;
+            bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) ||
+                             yieldDec;
 
             bool fire = false;
             if ((haveAct || haveFresh) && !holdStart) {
@@ -1217,7 +1255,10 @@ int main() {
         // ---- clouds ----
         for (int c = 0; c < K; ++c) {
             if (!cloudFree[c]) continue;
-            if (!BK[B_DPROC + c].empty()) {
+            // Same argument on the cloud side: a queued prefill piece here is
+            // on the critical path of a request whose TDR is still running,
+            // while the decode round it displaces only stretches a gap.
+            if (!BK[B_DPROC + c].empty() && !(tdrBound && !BK[B_PPROC + c].empty())) {
                 batch = BK[B_DPROC + c];
                 sort(batch.begin(), batch.end());
                 as("C");
