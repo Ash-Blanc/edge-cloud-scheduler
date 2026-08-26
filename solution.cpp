@@ -928,34 +928,28 @@ int main() {
             const int hi = min(4096, max(1, M_EFF));
             double peakPipeRate = 0.0;
             for (int m = 1;;) {
-                int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
-                if (g >= 2) {
-                    double rate = 0.0;
-                    pipedObjective(m, g, exTdr, &rate, nullptr);
-                    peakPipeRate = max(peakPipeRate, rate);
-                }
+                int g = max(1, min(ENSEMBLE_PIPE_GCAP, poolD / m));
+                double rate = 0.0;
+                pipedObjective(m, g, exTdr, &rate, nullptr);
+                peakPipeRate = max(peakPipeRate, rate);
                 if (m >= hi) break;
                 m = min(hi, m + max(1, m / 8));
             }
 
             double best = -1.0, bestSoft = -1e300;
-            int bestM = mDesign, bestG = 1, softM = mDesign, softG = 1;
+            int bestM = mDesign, softM = mDesign;
             for (int m = 1;;) {
-                int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
-                if (g >= 2) {
-                    double rate = 0.0, soft = 0.0;
-                    double value = pipedObjective(m, g, exTdr, &rate, nullptr, &soft);
-                    if (rate + 1e-12 >= THR_FLOOR * peakPipeRate) {
-                        if (value >= best - 1e-12) {
-                            best = max(best, value);
-                            bestM = m;
-                            bestG = g;
-                        }
-                        if (soft > bestSoft) {
-                            bestSoft = soft;
-                            softM = m;
-                            softG = g;
-                        }
+                int g = max(1, min(ENSEMBLE_PIPE_GCAP, poolD / m));
+                double rate = 0.0, soft = 0.0;
+                double value = pipedObjective(m, g, exTdr, &rate, nullptr, &soft);
+                if (rate + 1e-12 >= THR_FLOOR * peakPipeRate) {
+                    if (value >= best - 1e-12) {
+                        best = max(best, value);
+                        bestM = m;
+                    }
+                    if (soft > bestSoft) {
+                        bestSoft = soft;
+                        softM = m;
                     }
                 }
                 if (m >= hi) break;
@@ -964,12 +958,12 @@ int main() {
             if (best > -0.5) {
                 if (best <= 1e-12) {
                     bestM = softM;
-                    bestG = softG;
                 }
-                if (bestG >= 2) {
-                    mDesign = bestM;
-                    pipeStagger = true;
-                }
+                mDesign = bestM;
+                // The static phase gate proves that g >= 2 plans exist for
+                // this table. Keep one-cohort firing through the tail even if
+                // the shrinking live pool temporarily selects g == 1.
+                pipeStagger = true;
             }
         }
 
