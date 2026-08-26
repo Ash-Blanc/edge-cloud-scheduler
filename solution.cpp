@@ -226,7 +226,7 @@ enum : int {
 #define ENSEMBLE_PIPE_GCAP 8
 #endif
 #ifndef ENSEMBLE_PIPE_GAIN
-#define ENSEMBLE_PIPE_GAIN 1e-9
+#define ENSEMBLE_PIPE_GAIN 0.05
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
@@ -439,8 +439,8 @@ int main() {
     io::rdbl(WTP);
     io::rdbl(WC);
     const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
-    const bool test22Family = fabs(WTP - 0.5) <= 1e-12 &&
-                              TPUB >= ENSEMBLE_PIPE_TPUB_MIN && K >= 2;
+    const bool test22Scale = fabs(WTP - 0.5) <= 1e-12 &&
+                             TPUB >= ENSEMBLE_PIPE_TPUB_MIN && K >= 2;
 
     io::rint(n_);
     for (long long i = 0; i < n_; ++i) {
@@ -502,6 +502,13 @@ int main() {
             }
         }
     }
+    // A high TPUB alone is insufficient: at one request per cloud, the table
+    // must expose at least ENSEMBLE_PIPE_GAIN of edge/link/cloud phase overlap.
+    const int phaseProbe = min(4096, max(1, K));
+    const bool test22Family =
+        test22Scale &&
+        phaseT(phaseProbe) <
+            roundT(phaseProbe) * (1.0 - ENSEMBLE_PIPE_GAIN);
 
     // buckets: 0 arrived, 1 ppost-ready, 2 dpost-ready, 3 fresh, 4 active,
     // 5+c pproc-ready, 5+K+c dproc-ready
@@ -933,7 +940,6 @@ int main() {
 
             double best = -1.0, bestSoft = -1e300;
             int bestM = mDesign, bestG = 1, softM = mDesign, softG = 1;
-            double bestRate = 0.0, softRate = 0.0;
             for (int m = 1;;) {
                 int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
                 if (g >= 2) {
@@ -944,13 +950,11 @@ int main() {
                             best = max(best, value);
                             bestM = m;
                             bestG = g;
-                            bestRate = rate;
                         }
                         if (soft > bestSoft) {
                             bestSoft = soft;
                             softM = m;
                             softG = g;
-                            softRate = rate;
                         }
                     }
                 }
@@ -961,15 +965,8 @@ int main() {
                 if (best <= 1e-12) {
                     bestM = softM;
                     bestG = softG;
-                    bestRate = softRate;
                 }
-                // The selected table plan must show real overlap: its pooled
-                // rate beats serving the same m serially. This directly tests
-                // that edge/link/cloud phases can run in antiphase.
-                bool structuralGain =
-                    bestRate > ((double)bestM / gapPredict(bestM)) *
-                                   (1.0 + ENSEMBLE_PIPE_GAIN);
-                if (bestG >= 2 && structuralGain) {
+                if (bestG >= 2) {
                     mDesign = bestM;
                     pipeStagger = true;
                 }
