@@ -208,6 +208,9 @@ enum : int {
 #ifndef PREFILL_WORKLOAD_WTP
 #define PREFILL_WORKLOAD_WTP 0.15
 #endif
+#ifndef PREFILL_PRIORITY_WTP
+#define PREFILL_PRIORITY_WTP 0.0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -828,6 +831,15 @@ int main() {
             tdrBound = !tpotBound && WC > 1e-9 && nPrefPend > 0 &&
                        exTdr > TPOT_DOM * exTpot && ncNow > 0.0 &&
                        WC * ncNow >= WTP * ntpCeil;
+            // For a pure-TDR objective, decode has zero marginal value while
+            // any request's input stage is unfinished: TDR stops at P POST,
+            // before decode starts.  Exchanging a ready decode operation with
+            // ready prefill work cannot delay any TDR completion and may
+            // advance one, so prefill gets strict priority from the outset
+            // rather than only after the running mean has crossed SLO1.
+            if (!tpotBound && nPrefPend > 0 &&
+                WTP <= PREFILL_PRIORITY_WTP + 1e-12)
+                tdrBound = true;
 
             // The throughput floor is here because starving the cohort also
             // lengthens every queue, which feeds back into TDR and makespan --
