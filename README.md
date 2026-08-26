@@ -51,6 +51,12 @@ Two consequences of the definitions drive the design:
 - **`dist_base == 0` is a cliff.** There the waiting-time component is all or
   nothing, so when the target is still reachable it is protected rather than
   traded.
+- **Which dist leg dominates.** `dist` is the Euclidean norm of the two
+  excesses, so shortening the decode round pays exactly while the TPOT leg is
+  the longer one — even if mean TDR is already over SLO1. When the TDR leg is
+  instead the longer one, decode yields the edge and the clouds to prefill.
+  The two trades are mutually exclusive. The TPOT-protective admission cap
+  still stands down once a measured gap shows TDR dwarfs TPOT.
 - **Weight-aware edge order.** On latency-heavy tests, ready `P POST` work
   finishes before a new decode round so TDR stops growing. On high-link-latency
   throughput tests, decode posts wait for the other running cloud groups and
@@ -133,9 +139,9 @@ to 0.02s because there are an order of magnitude fewer frames.
 ## Tuning knobs
 
 `EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, `FRAG_LAT_SHARE`, `KUSE_MARGIN`,
-`PIPE_MODE`, `PIPE_GCAP`, `PIPE_SYNC_WTP`, `POST_EDGEBOUND` and the guarded
-edge-order thresholds are compile-time macros so variants can be swept without
-editing code:
+`TPOT_DOM`, `TPOT_DIST_SHARE`, `PIPE_MODE`, `PIPE_GCAP`, `PIPE_SYNC_WTP`,
+`POST_EDGEBOUND` and the guarded edge-order thresholds are compile-time macros
+so variants can be swept without editing code:
 
 ```bash
 g++ -O2 -std=c++17 -DTHR_FLOOR=0.7 -o /tmp/variant solution.cpp
