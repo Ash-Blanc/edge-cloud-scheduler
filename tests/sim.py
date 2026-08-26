@@ -416,16 +416,20 @@ def make_table(kind, rng):
 
 
 def make_case(name, seed, K, R, layers, span, wtp, a1, a2, kind="gpu",
-              lat=1.0, bw=10.0, bpt=32768, S=2.0, lin_hi=1024, lout_hi=128):
+              lat=1.0, bw=10.0, bpt=32768, S=2.0, lin_hi=1024, lout_hi=128,
+              lout_fixed=None):
     """span is the arrival window in ms; a small span means a saturated backlog,
-    which is the regime the judge's hard tests live in."""
+    which is the regime the judge's hard tests live in. lout_fixed pins every
+    output length, which is how the total token count -- and so the number of
+    decode rounds a scheduler can be asked to run -- is driven to its limit."""
     rng = random.Random(seed)
     table = make_table(kind, rng)
     arrivals = []
     for _ in range(R):
         t = rng.uniform(0.0, span)
         lin = rng.choice([x for x in [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] if x <= lin_hi])
-        lout = rng.choice([x for x in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] if x <= lout_hi])
+        lout = lout_fixed or rng.choice(
+            [x for x in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] if x <= lout_hi])
         arrivals.append((t, lin, lout))
     arrivals.sort(key=lambda x: x[0])
     c = Case(K, S, lat, bw, bpt, layers, 1.0, 1.0, table, arrivals, wtp, 1.0 - wtp)
@@ -495,6 +499,11 @@ def build_cases():
     # case that bounds how far that trade may be taken.
     c.append(make_case("stress-lat-R2000", 98, 8, 2000, 64, 200.0, 0.05, 0.10, 0.10,
                        kind="flat", lout_hi=128))
+    # Every request at the maximum output length, so the token count -- and with
+    # it the number of decode rounds a shrunk cohort implies -- is as large as
+    # the stated limits allow. This is the case that bounds scheduler CPU.
+    c.append(make_case("stress-lat-max", 97, 8, 2000, 64, 200.0, 0.05, 0.10, 0.10,
+                       kind="flat", lout_fixed=128))
     # Near-flat decode scaling: huge cohorts should pay off enormously.
     c.append(make_case("flat-sat-K8", 91, 8, 800, 16, 100.0, 1.00, 0.05, 0.05, kind="flat"))
     c.append(make_case("flat-sat-K4", 92, 4, 500, 8, 100.0, 0.60, 0.10, 0.10, kind="flat"))

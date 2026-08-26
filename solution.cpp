@@ -197,11 +197,6 @@ enum : int {
 #ifndef CHUNK_S_FACTOR
 #define CHUNK_S_FACTOR 20.0
 #endif
-// Fraction of a decode round's free window on a cloud that a prefill piece may
-// occupy, in the regime where the waiting-time term is what is being scored.
-#ifndef TPOT_CHUNK_SLACK
-#define TPOT_CHUNK_SLACK 1.0
-#endif
 // Steering round time trades TPOT excess down for TDR excess up, and dist is
 // the Euclidean norm of the two, so the trade pays exactly while the TPOT leg
 // is the longer one: d(dist) = (e_tdr*de_tdr + e_tpot*de_tpot)/dist. Requiring
@@ -259,6 +254,9 @@ static const int GAP_BUCKETS = 14;
 static double gapEw[GAP_BUCKETS];
 static double gapLo[GAP_BUCKETS];  // prefix max of the measured means
 static int gapN[GAP_BUCKETS];
+// Bumped only when an observation actually moves a prediction, so the cohort
+// search downstream can tell whether its inputs have changed.
+static long long gapGen = 0;
 static inline int gapBucket(int m) {
     int b = 0;
     while (b < GAP_BUCKETS - 1 && (2 << b) <= m) ++b;
@@ -266,9 +264,15 @@ static inline int gapBucket(int m) {
 }
 static inline void gapObserve(int m, double g) {
     int b = gapBucket(m);
+    double was = gapEw[b];
+    bool crossed = (gapN[b] < GAP_MINSAMP);
     if (!gapN[b]) gapEw[b] = g;
     else gapEw[b] += (g - gapEw[b]) / (double)min(gapN[b] + 1, (int)GAP_WINDOW);
     ++gapN[b];
+    crossed = crossed && gapN[b] >= GAP_MINSAMP;
+    // The mean converges, so most observations leave every prediction where it
+    // was. Only a move worth acting on is worth telling anyone about.
+    if (!crossed && fabs(gapEw[b] - was) <= 1e-3 * max(1.0, fabs(was))) return;
     // A bigger cohort cannot round-trip faster than a smaller one did under the
     // same interference, so evidence at one size floors every larger size.
     // Without that, a size nobody has tried yet always looks better than the
@@ -278,6 +282,7 @@ static inline void gapObserve(int m, double g) {
         if (gapN[i] >= GAP_MINSAMP && gapEw[i] > run) run = gapEw[i];
         gapLo[i] = run;
     }
+    ++gapGen;
 }
 static inline double gapPredict(int m) {
     int b = gapBucket(m);
@@ -464,6 +469,9 @@ int main() {
     long long nGap = 0;
 
     vector<int> finBuf, ridBuf, batch;
+    long long searchGen = -1;
+    double searchTdr = -1, searchNtp = 0;
+    int searchM = 1, searchCap = 1 << 30;
 
     auto setSt = [&](int rid, int st) { R[rid].st = st; };
 
@@ -711,33 +719,57 @@ int main() {
         // should flow the other way: to prefill, away from decode.
         bool tdrBound = false;
         {
-            double best = -1, bestSoft = -1e300;
-            int mSoft = 1;
-            double ntpCeil = 0;
-            int hi = min(4096, max(1, M_EFF));
-            for (int m = 1;;) {
-                double soft = 0;
-                double v = objective(m, exTdr, &soft);
-                if (v >= best - 1e-12) {
-                    best = max(best, v);
-                    mDesign = m;
+            const int hi = min(4096, max(1, M_EFF));
+            // The scan is the most expensive thing done per frame, and its only
+            // inputs are the gap statistics and the TDR excess. Both are running
+            // means that settle, so re-deriving the same answer on every frame
+            // is the bulk of the scheduler's processor time on a long run: at
+            // the stated limits with a short decode round there are seven
+            // figures of frames, and each was paying for a fresh scan.
+            if (searchGen != gapGen ||
+                fabs(exTdr - searchTdr) > 1e-3 * max(1e-9, searchTdr)) {
+                searchGen = gapGen;
+                searchTdr = exTdr;
+                double best = -1, bestSoft = -1e300;
+                int mSoft = 1;
+                searchM = 1;
+                searchNtp = 0;
+                for (int m = 1;;) {
+                    double soft = 0;
+                    double v = objective(m, exTdr, &soft);
+                    if (v >= best - 1e-12) {
+                        best = max(best, v);
+                        searchM = m;
+                    }
+                    if (soft > bestSoft) {
+                        bestSoft = soft;
+                        mSoft = m;
+                    }
+                    if (TPUB > TPBASE)
+                        searchNtp = max(searchNtp, clamp01(((double)m / roundT(m) - TPBASE) /
+                                                           (TPUB - TPBASE)));
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
                 }
-                if (soft > bestSoft) {
-                    bestSoft = soft;
-                    mSoft = m;
+                // Every candidate scores exactly zero: the objective has no
+                // gradient at all here, so the loop above just kept the last
+                // size it looked at -- the largest, which is the worst possible
+                // round time. Fall back to the unclamped score, which still
+                // points at the size that comes closest to scoring.
+                if (best <= 1e-12) searchM = mSoft;
+                // The all-or-nothing branch of the w_c term: with no gradient to
+                // follow, hold the largest size whose round still fits SLO2.
+                searchCap = hi;
+                if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
+                    searchCap = 1;
+                    for (int m = 1; m <= hi; ++m) {
+                        if (gapPredict(m) <= SLO2) searchCap = m;
+                        else break;
+                    }
                 }
-                if (TPUB > TPBASE)
-                    ntpCeil = max(ntpCeil,
-                                  clamp01(((double)m / roundT(m) - TPBASE) / (TPUB - TPBASE)));
-                if (m >= hi) break;
-                m = min(hi, m + max(1, m / 8));
             }
-            // Every candidate scores exactly zero: the objective has no gradient
-            // at all here, so the loop above just kept the last size it looked
-            // at -- the largest, which is the worst possible round time. Fall
-            // back to the unclamped score, which still points at the size that
-            // comes closest to scoring.
-            if (best <= 1e-12) mDesign = mSoft;
+            mDesign = searchM;
+            const double ntpCeil = searchNtp;
 
             double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
             double dAt = sqrt(exTdr * exTdr + exAt * exAt);
@@ -791,14 +823,7 @@ int main() {
             // anyway overrides the objective before it can even try the small
             // cohort, which is the only size that term ever rewards.
             if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
-            if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
-                int cap = 1;
-                for (int m = 1; m <= hi; ++m) {
-                    if (gapPredict(m) <= SLO2) cap = m;
-                    else break;
-                }
-                mDesign = min(mDesign, cap);
-            }
+            mDesign = min(mDesign, searchCap);
         }
 
 
@@ -1062,8 +1087,7 @@ int main() {
                 // is the term this regime is not being scored on.
                 if (tpotBound) {
                     int per = max(1, (mDesign + K - 1) / K);
-                    double slack =
-                        TPOT_CHUNK_SLACK * (roundT(mDesign) - (S + tDproc.get(per)));
+                    double slack = roundT(mDesign) - (S + tDproc.get(per));
                     take = max(1, (int)floor(max(slack, perLayer) / max(perLayer, 1e-9)));
                     take = min(take, remain);
                 }
