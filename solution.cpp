@@ -213,6 +213,18 @@ enum : int {
 #ifndef TPOT_CHUNK_SLACK
 #define TPOT_CHUNK_SLACK 1.0
 #endif
+// Official A/B evidence shows that throughput machinery added after d89134d
+// overrides the latency controller on tests where throughput is at most 30% of
+// the score. Keep a small margin above that observed boundary: below it the
+// d89134d controller owns cohort sizing, admission, cloud choice and firing.
+#ifndef LATENCY_WEIGHT_CUTOFF
+#define LATENCY_WEIGHT_CUTOFF 0.35
+#endif
+// The legacy latency controller spends throughput on TPOT only while measured
+// TDR still has substantial room. Keep its original threshold exactly.
+#ifndef TPOT_TDR_ROOM
+#define TPOT_TDR_ROOM 0.5
+#endif
 // Steering round time trades TPOT excess down for TDR excess up, and dist is
 // the Euclidean norm of the two, so the trade pays exactly while the TPOT leg
 // is the longer one: d(dist) = (e_tdr*de_tdr + e_tpot*de_tpot)/dist. Requiring
@@ -462,6 +474,7 @@ int main() {
     io::rdbl(DBASE);
     io::rdbl(WTP);
     io::rdbl(WC);
+    const bool legacyLatency = WTP <= LATENCY_WEIGHT_CUTOFF + 1e-12;
 
     io::rint(n_);
     for (long long i = 0; i < n_; ++i) {
@@ -806,12 +819,17 @@ int main() {
         // the run is being settled. The TDR-dominance guard therefore waits
         // for a real observation; the predicted-leg test below covers the
         // unmeasured window.
-        bool tdrDominated = nGap > 0 && exTpot < TPOT_DIST_SHARE * exTdr;
+        bool tdrDominated =
+            !legacyLatency && nGap > 0 && exTpot < TPOT_DIST_SHARE * exTdr;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
 
         int nAssigned = 0;
         ANS.clear();
+#ifdef SCHED_TRACE
+        int traceKuse = K;
+        int traceAdmissions = 0;
+#endif
 
         // ---- edge ----
         bool edgeBusyNow = !edgeFree;
@@ -822,7 +840,8 @@ int main() {
         // because its SLO2 cap is stated in single-round terms.
         int poolD = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
         int gAllow = 1;
-        if (PIPE_MODE >= 1 && WTP > 1e-9 && !prefWork && !(DBASE <= 0 && WC > 1e-9))
+        if (!legacyLatency && PIPE_MODE >= 1 && WTP > 1e-9 && !prefWork &&
+            !(DBASE <= 0 && WC > 1e-9))
             gAllow = PIPE_GCAP;
 
         // Decode cohort. mDesign is the size the system *wants* to run at; we
@@ -866,8 +885,10 @@ int main() {
             // also bounds exAt -- which keeps the predicted-leg comparison out
             // of the scan's way while still letting it veto the scan entirely.
             double exAtUB = max(0.0, (gapPredict(hi) - SLO2) / SLO2);
-            bool tpotPossible = WC > 1e-9 && exAtUB > TPOT_DOM * exTdr &&
-                                !tdrDominated && WC * ncUB >= WTP * NTP_CEIL;
+            bool tpotPossible =
+                legacyLatency ||
+                (WC > 1e-9 && exAtUB > TPOT_DOM * exTdr && !tdrDominated &&
+                 WC * ncUB >= WTP * NTP_CEIL);
             if (gAllow == 1 || tpotPossible) {
                 for (int m = 1;;) {
                     double soft = 0;
@@ -905,8 +926,17 @@ int main() {
                 // SLO1 and still have almost all of its dist in the TPOT leg,
                 // and there the trade is overwhelmingly profitable even
                 // though no TDR budget is left in absolute terms.
-                tpotBound = tpotPossible && exAt > TPOT_DOM * exTdr &&
-                            WC * ncAt >= WTP * NTP_CEIL;
+                if (legacyLatency) {
+                    // Exact d89134d ownership test. Neither the later
+                    // predicted-leg shortcut nor TPOT_DIST_SHARE may suppress
+                    // the admission controller before it engages.
+                    tpotBound = WC > 1e-9 && exAt > 0.0 &&
+                                estTdr <= TPOT_TDR_ROOM * SLO1 &&
+                                WC * ncAt >= WTP * NTP_CEIL;
+                } else {
+                    tpotBound = tpotPossible && exAt > TPOT_DOM * exTdr &&
+                                WC * ncAt >= WTP * NTP_CEIL;
+                }
                 if (tpotBound) gAllow = 1;
             }
 
@@ -977,7 +1007,7 @@ int main() {
         // own loop. Never both: they prescribe opposite trades, and the
         // predicted and measured TPOT legs can straddle the TDR leg during a
         // transient.
-        {
+        if (!legacyLatency) {
             double dNow = sqrt(exTdr * exTdr + exTpot * exTpot);
             double ncNow = (DBASE > 0) ? max(0.0, 1.0 - dNow / DBASE)
                                        : (dNow <= 1e-12 ? 1.0 : 0.0);
@@ -993,11 +1023,14 @@ int main() {
         // rounds are deliberately staggered: merging their posts would collapse
         // the stagger back into one synchronized cohort.
         bool edgeBoundIn = edgeW * (double)K >= cloudW && edgeW >= linkW;
-        bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
-                         gAllow <= 1 && WTP >= POST_HOLD_WTP &&
-                         (LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
-                          (POST_EDGEBOUND && edgeBoundIn && prefWork)) &&
-                         !(DBASE <= 0 && WC > 1e-9);
+        bool holdDpost =
+            edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
+            WTP >= POST_HOLD_WTP && !(DBASE <= 0 && WC > 1e-9) &&
+            (legacyLatency
+                 ? LAT > POST_LAT_RATIO * (S + tDpost.get(1))
+                 : (gAllow <= 1 &&
+                    (LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
+                     (POST_EDGEBOUND && edgeBoundIn && prefWork))));
         // The edge is one machine, so a decode task there is time a queued
         // request's P PRE or P POST is standing behind. Where the TDR leg is
         // what dist is made of, that ordering is backwards.
@@ -1054,7 +1087,9 @@ int main() {
 
             bool fire = false;
             if ((haveAct || haveFresh) && !holdStart) {
-                if (ready >= mDesign) {
+                if (legacyLatency && !havePrefill) {
+                    fire = true;  // d89134d: an otherwise idle edge fires
+                } else if (ready >= mDesign) {
                     fire = true;  // cohort is as large as it is worth waiting for
                 } else if (!havePrefill) {
                     // An idle edge is not on its own a reason to fire. Where a
@@ -1097,7 +1132,9 @@ int main() {
                 // Starvation escape: waiting for a bigger cohort is only free
                 // while nothing is being scored, so it can never outlast the
                 // gap budget of a request that already has a token.
-                if (!fire && WC > 1e-9 && meanOpenGap > 8.0 * SLO2) fire = true;
+                if (!fire && WC > 1e-9 && meanOpenGap > 8.0 * SLO2 &&
+                    (!legacyLatency || haveAct))
+                    fire = true;
             }
 
             if (fire) {
@@ -1132,7 +1169,9 @@ int main() {
                     // throughput, so it only applies while the TPOT leg of dist
                     // is worth buying; where the TDR leg dominates,
                     // over-admission is free score.
-                    int room = mDesign - (tdrDominated ? nActive : nCohort);
+                    int room =
+                        mDesign -
+                        (legacyLatency ? nCohort : (tdrDominated ? nActive : nCohort));
                     for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0;
                          --i, --room)
                         batch.push_back(BK[B_FRESH][i]);
@@ -1148,6 +1187,9 @@ int main() {
                             R[rid].joined = 1;
                             nCohort++;
                             if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
+#ifdef SCHED_TRACE
+                            traceAdmissions++;
+#endif
                         }
                         if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                         setSt(rid, ST_DPRE_RUN);
@@ -1204,7 +1246,7 @@ int main() {
             // stage's own arrival rate needs -- and only while the latency that
             // saves outweighs the longer cloud task a denser group implies.
             int kuse = K;
-            if (K > 1 && feedW > 0) {
+            if (!legacyLatency && K > 1 && feedW > 0) {
                 int need = (int)ceil(cloudW / feedW * (double)KUSE_MARGIN);
                 if (need < 1) need = 1;
                 if (need < K) {
@@ -1214,6 +1256,9 @@ int main() {
                     if (saved > added) kuse = need;
                 }
             }
+#ifdef SCHED_TRACE
+            traceKuse = kuse;
+#endif
             int c = 0;
             double bl = 1e300;
             // Prefill cannot be preempted, so a piece running on a cloud that a
@@ -1371,6 +1416,9 @@ int main() {
                         R[rid].joined = 1;
                         nCohort++;
                         if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
+#ifdef SCHED_TRACE
+                        traceAdmissions++;
+#endif
                     }
                     if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                     setSt(rid, ST_DPRE_RUN);
@@ -1384,6 +1432,13 @@ int main() {
             }
         }
 
+#ifdef SCHED_TRACE
+        fprintf(stderr,
+                "frame=%.9f legacy=%d mDesign=%d gAllow=%d kuse=%d admissions=%d "
+                "cohort=%d active=%d\n",
+                now, legacyLatency ? 1 : 0, mDesign, gAllow, traceKuse,
+                traceAdmissions, nCohort, nActive);
+#endif
         io::oi(nAssigned);
         io::oc('\n');
         io::osn(ANS.data(), ANS.size());

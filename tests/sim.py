@@ -295,7 +295,7 @@ class Sim:
         return tp, tdr, tpot
 
 
-def run(binary: str, case: Case, timeout=120.0):
+def run(binary: str, case: Case, timeout=120.0, trace=None):
     sim = Sim(case)
     c = case
     ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -334,13 +334,17 @@ def run(binary: str, case: Case, timeout=120.0):
             raise RuntimeError("scheduler closed the stream")
         n = int(head.strip())
         seen = set()
+        commands = []
         for _ in range(n):
             cmd = proc.stdout.readline().strip()
+            commands.append(cmd)
             srv = cmd.split()[0]
             if srv in seen:
                 raise RuntimeError("two tasks assigned to " + srv)
             seen.add(srv)
             sim.assign(cmd)
+        if trace is not None:
+            trace.append((f"{t:.9f}", tuple(commands)))
         frames += 1
         if frames > 3_000_000:
             raise RuntimeError("frame limit")
