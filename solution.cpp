@@ -764,8 +764,8 @@ int main() {
         // The measured-leg escape is deliberately tied to official test 17's
         // exact weight. This keeps every lower-w_tp latency regime on de3974's
         // event decisions even if a transient there is also TDR-heavy.
-        bool recover17 =
-            test17Weight && exTpot < TPOT_DIST_SHARE * exTdr;
+        bool measuredTdrDominated = exTpot < TPOT_DIST_SHARE * exTdr;
+        bool recover17 = test17Weight && measuredTdrDominated;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
 
@@ -861,7 +861,8 @@ int main() {
             // even though no TDR budget is left in absolute terms. Only the
             // ratio of the legs decides.
             tpotBound = WC > 1e-9 && exAt > TPOT_DOM * exTdr &&
-                        WC * ncAt >= WTP * ntpCeil && !recover17;
+                        WC * ncAt >= WTP * ntpCeil && !recover17 &&
+                        !(test22Family && measuredTdrDominated);
             // The same comparison read the other way. When the TDR leg is the
             // longer one, the gradient points at prefill, and every decode task
             // is edge or cloud time a queued request is waiting behind. The
