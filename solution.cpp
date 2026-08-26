@@ -225,16 +225,24 @@ static inline double roundT(int m) {
 static inline double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
 // The judge's own formula, evaluated on the cohort we are considering.
-static double objective(int m, double ex_tdr, double infl) {
+//
+// `soft` is the same expression with the clamps removed. Both clamps saturate:
+// once a target is out of reach the real score is flat zero for *every* cohort
+// size, so it cannot say which size comes closest, and a search that maximises
+// it keeps whichever candidate it happened to visit last. The unclamped copy
+// still ranks those tied sizes, so it is used only to break ties.
+static double objective(int m, double ex_tdr, double infl, double* soft = nullptr) {
     double rt = roundT(m);
-    double ntp = 0.0;
-    if (TPUB > TPBASE) ntp = clamp01(((double)m / rt - TPBASE) / (TPUB - TPBASE));
+    double raw_tp = 0.0;
+    if (TPUB > TPBASE) raw_tp = ((double)m / rt - TPBASE) / (TPUB - TPBASE);
     double ex_tpot = max(0.0, (rt * infl - SLO2) / SLO2);
     double dist = sqrt(ex_tdr * ex_tdr + ex_tpot * ex_tpot);
+    double raw_c = (DBASE > 0) ? (1.0 - dist / DBASE) : -dist;
+    if (soft) *soft = WTP * raw_tp + WC * raw_c;
     double nc;
-    if (DBASE > 0) nc = max(0.0, 1.0 - dist / DBASE);
+    if (DBASE > 0) nc = max(0.0, raw_c);
     else nc = (dist <= 1e-12) ? 1.0 : 0.0;
-    return WTP * ntp + WC * nc;
+    return WTP * clamp01(raw_tp) + WC * nc;
 }
 
 struct Req {
@@ -245,6 +253,7 @@ struct Req {
     double arr = 0;
     double last_tok = 0;
     int st = ST_ARR;
+    char joined = 0;  // has been admitted to a decode round at least once
 };
 
 static vector<Req> R;
@@ -377,7 +386,7 @@ int main() {
     vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
-    int nLive = 0, nActive = 0, nPrefPend = 0;
+    int nLive = 0, nActive = 0, nPrefPend = 0, nCohort = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
     long long nTdr = 0;
@@ -422,6 +431,7 @@ int main() {
                 r.last_tok = now;
                 r.next_ls = 0;
                 r.tokens = 0;
+                r.joined = 0;
                 r.cloud = -1;
                 r.st = ST_ARR;
                 bid[rid] = -1;
@@ -581,6 +591,7 @@ int main() {
                 nActive--;
                 sumLastTok -= r.last_tok;
             }
+            if (r.joined) nCohort--;
             r.st = ST_FIN;
             bmove(rid, -1);
             if (r.cloud >= 0) nDec[r.cloud]--;
@@ -655,17 +666,29 @@ int main() {
         }
         int mDesign = 1;
         {
-            double best = -1;
+            double best = -1, bestSoft = -1e300;
+            int mSoft = 1;
             int hi = min(4096, max(1, M_EFF));
             for (int m = 1;;) {
-                double v = objective(m, exTdr, infl);
+                double soft = 0;
+                double v = objective(m, exTdr, infl, &soft);
                 if (v >= best - 1e-12) {
                     best = max(best, v);
                     mDesign = m;
                 }
+                if (soft > bestSoft) {
+                    bestSoft = soft;
+                    mSoft = m;
+                }
                 if (m >= hi) break;
                 m = min(hi, m + max(1, m / 8));
             }
+            // Every candidate scores exactly zero: the objective has no gradient
+            // at all here, so the loop above just kept the last size it looked
+            // at -- the largest, which is the worst possible round time. Fall
+            // back to the unclamped score, which still points at the size that
+            // comes closest to scoring.
+            if (best <= 1e-12) mDesign = mSoft;
             // dist_base == 0 makes the waiting-time component all-or-nothing:
             // any excess at all forfeits the whole w_c share. When the target is
             // still reachable, protect it rather than trusting the tdr estimate.
@@ -718,7 +741,12 @@ int main() {
             if (fire) {
                 batch.clear();
                 for (int rid : BK[B_ACT]) batch.push_back(rid);
-                int room = mDesign - nActive;
+                // Admitting a request commits it to every later round, so the
+                // budget has to be spent against everyone already admitted --
+                // not against nActive, which ignores members whose first token
+                // has not landed yet and so lets a whole burst of admissions
+                // through in the window before it does.
+                int room = mDesign - nCohort;
                 for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0; --i, --room)
                     batch.push_back(BK[B_FRESH][i]);
                 if (!batch.empty()) {
@@ -728,6 +756,10 @@ int main() {
                     for (int rid : batch) {
                         ac(' ');
                         ai(rid);
+                        if (!R[rid].joined) {
+                            R[rid].joined = 1;
+                            nCohort++;
+                        }
                         setSt(rid, ST_DPRE_RUN);
                         bmove(rid, -1);
                     }
@@ -892,6 +924,10 @@ int main() {
                 for (int rid : batch) {
                     ac(' ');
                     ai(rid);
+                    if (!R[rid].joined) {
+                        R[rid].joined = 1;
+                        nCohort++;
+                    }
                     setSt(rid, ST_DPRE_RUN);
                     bmove(rid, -1);
                 }
