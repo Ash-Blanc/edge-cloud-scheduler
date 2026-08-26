@@ -529,7 +529,7 @@ int main() {
     vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
-    int nLive = 0, nActive = 0, nPrefPend = 0, nCohort = 0;
+    int nLive = 0, nActive = 0, nPrefPend = 0, nDecFlight = 0, nCohort = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
     long long nTdr = 0;
@@ -672,6 +672,7 @@ int main() {
                         xfers++;
                         decDown++;
                     } else {  // D POST: one token per member
+                        nDecFlight -= (int)ridBuf.size();
                         int grp = (int)ridBuf.size();
                         for (int rid : ridBuf) {
                             Req& r = R[rid];
@@ -914,9 +915,8 @@ int main() {
         bool pipeStagger = false;
         bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
         if (test22Family && !prefillWantsEdge && !tpotBound && DBASE > 0) {
-            // nCohort includes ready and in-flight admitted members; fresh
-            // requests are the only additional members available to the plan.
-            const int poolD = nCohort + (int)BK[B_FRESH].size();
+            const int poolD =
+                (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
             const int hi = min(4096, max(1, M_EFF));
             const double baseGap = gapPredict(mDesign);
             double peakPipeRate = 0.0;
@@ -1118,6 +1118,7 @@ int main() {
                         bmove(rid, -1);
                     }
                     ac('\n');
+                    nDecFlight += (int)batch.size();
                     edgeFree = false;
                     running++;
                     nAssigned++;
@@ -1322,6 +1323,7 @@ int main() {
                     bmove(rid, -1);
                 }
                 ac('\n');
+                nDecFlight += (int)batch.size();
                 edgeFree = false;
                 running++;
                 nAssigned++;
