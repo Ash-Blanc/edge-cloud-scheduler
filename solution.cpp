@@ -249,6 +249,12 @@ enum : int {
 #ifndef PUBLIC_TDR_POST_ORDER
 #define PUBLIC_TDR_POST_ORDER 1
 #endif
+// SPT minimizes the bulk sum of completion times, but leaving its largest job
+// last can extend the final pipeline drain.  Within this many final arrivals,
+// reverse the order so the shortest remaining chain is the tail request.
+#ifndef PUBLIC_TDR_TAIL_LPT
+#define PUBLIC_TDR_TAIL_LPT 0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -1112,12 +1118,27 @@ int main() {
                 if (!done && !BK[B_ARR].empty()) {
                     int rid = -1;
                     if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
-                        while (!qArr.empty()) {
-                            int candidate = qArr.top().second;
-                            qArr.pop();
-                            if (bid[candidate] == B_ARR) {
-                                rid = candidate;
-                                break;
+                        if (PUBLIC_TDR_TAIL_LPT > 1 &&
+                            (int)BK[B_ARR].size() <= PUBLIC_TDR_TAIL_LPT) {
+                            double longest = -1.0;
+                            for (int candidate : BK[B_ARR]) {
+                                double chain = tPpre.get(R[candidate].lin) +
+                                               tPproc.get(R[candidate].lin) +
+                                               tPpost.get(R[candidate].lin) +
+                                               2.0 * xfer(R[candidate].lin);
+                                if (chain > longest) {
+                                    longest = chain;
+                                    rid = candidate;
+                                }
+                            }
+                        } else {
+                            while (!qArr.empty()) {
+                                int candidate = qArr.top().second;
+                                qArr.pop();
+                                if (bid[candidate] == B_ARR) {
+                                    rid = candidate;
+                                    break;
+                                }
                             }
                         }
                     }
