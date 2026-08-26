@@ -208,6 +208,9 @@ enum : int {
 #ifndef PREFILL_WORKLOAD_WTP
 #define PREFILL_WORKLOAD_WTP 0.15
 #endif
+#ifndef TDR_UNSPLIT_WTP
+#define TDR_UNSPLIT_WTP 0.15
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -1098,7 +1101,12 @@ int main() {
             int ls = r.next_ls, remain = LAYERS - ls, take = remain;
             // Split only when a long prefill would otherwise pin this cloud and
             // stall decode rounds that are being measured.
-            if (WC > 1e-9 && remain > 1 && nDec[c] > 0) {
+            // Chunking exists to fit prefill between decode rounds.  When TDR
+            // is the active objective, decode is already yielding to prefill;
+            // splitting then buys no protected gap and only adds another S to
+            // the unfinished request's critical path.
+            bool keepWhole = tdrBound && WTP <= TDR_UNSPLIT_WTP + 1e-12;
+            if (WC > 1e-9 && remain > 1 && nDec[c] > 0 && !keepWhole) {
                 double full = tPproc.get(r.lin) * (double)remain / LAYERS;
                 double perLayer = tPproc.get(r.lin) / LAYERS;
                 // A decode round needs this cloud once per round and leaves the
