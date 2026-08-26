@@ -360,9 +360,9 @@ static double objective(int m, double ex_tdr, double* soft = nullptr) {
 // consulted only by the test-22 ensemble arm; g == 1 is never selected there.
 static double pipedObjective(int m, int g, double ex_tdr, double* rateOut,
                              double* gapOut, double* soft = nullptr) {
-    double gap = max(roundT(m), (double)g * phaseT(m));
-    gap = max(gap, gapPredict(m));
-    double rate = (double)(g * m) / gap;
+    double cycle = max(roundT(m), (double)g * phaseT(m));
+    double gap = max(cycle, gapPredict(m));
+    double rate = (double)(g * m) / cycle;
     double raw_tp = 0.0;
     if (TPUB > TPBASE) raw_tp = (rate - TPBASE) / (TPUB - TPBASE);
     double ex_tpot = max(0.0, (gap - SLO2) / SLO2);
