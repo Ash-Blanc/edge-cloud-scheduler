@@ -197,6 +197,17 @@ enum : int {
 #ifndef CHUNK_S_FACTOR
 #define CHUNK_S_FACTOR 20.0
 #endif
+// Fraction of a decode round that has to be fixed link latency before the
+// cohort is worth protecting from fragmentation.
+#ifndef FRAG_LAT_SHARE
+#define FRAG_LAT_SHARE 0.5
+#endif
+// The cloud pool is sized from a capacity ratio, so it needs the headroom any
+// shared resource needs: a pool loaded to exactly 100% queues without bound.
+// This is the reciprocal of the utilisation it is sized for.
+#ifndef KUSE_MARGIN
+#define KUSE_MARGIN 1.08
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -220,6 +231,14 @@ static vector<double> roundCache;
 static inline double roundT(int m) {
     if (m >= 1 && m < (int)roundCache.size()) return roundCache[m];
     return round_time(m);
+}
+
+// Fraction of a round of m that is fixed link latency. A round pays LAT once
+// per participating cloud in each direction whatever it carries, so this is the
+// part of the round that a larger cohort amortises and a smaller one repeats.
+static inline double latShare(int m) {
+    if (m < 1) m = 1;
+    return 2.0 * min(K, m) * LAT / max(roundT(m), 1e-12);
 }
 
 static inline double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
@@ -377,12 +396,13 @@ int main() {
     vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
-    int nLive = 0, nActive = 0, nPrefPend = 0;
+    int nLive = 0, nActive = 0, nPrefPend = 0, nDecFlight = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
     long long nTdr = 0;
     double sumGap = 0;
     long long nGap = 0;
+    double cloudW = 0, feedW = 0;
 
     vector<int> finBuf, ridBuf, batch;
 
@@ -431,6 +451,10 @@ int main() {
                 sumArrPend += now;
                 double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
                 qArr.push(PDI(w, (int)rid));
+                // Capacity of the input stage, used to size the cloud pool.
+                cloudW += S + tPproc.get(r.lin);
+                feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin),
+                             xfer(r.lin));
             } else if (e0 == 'F') {  // FIN rid
                 long long rid = 0;
                 io::rint(rid);
@@ -516,6 +540,7 @@ int main() {
                         xfers++;
                         decDown++;
                     } else {  // D POST: one token per member
+                        nDecFlight -= (int)ridBuf.size();
                         for (int rid : ridBuf) {
                             Req& r = R[rid];
                             if (r.tokens >= 1) {
@@ -688,10 +713,18 @@ int main() {
 
             bool fire = false;
             if (haveAct || haveFresh) {
-                if (!havePrefill) {
-                    fire = true;  // nothing else for the edge to do
-                } else if (ready >= mDesign) {
+                if (ready >= mDesign) {
                     fire = true;  // cohort is as large as it is worth waiting for
+                } else if (!havePrefill) {
+                    // An idle edge is not on its own a reason to fire. Where a
+                    // round is mostly fixed link latency, splitting the cohort
+                    // multiplies the dominant term by the number of pieces, and
+                    // both links are FIFO-shared by every round, so short rounds
+                    // saturate the links while every machine idles. Members still
+                    // inside a round return and enlarge this cohort for nothing
+                    // but makespan, so wait for them -- but only in that regime,
+                    // and only while there is something left to wait for.
+                    fire = (nDecFlight == 0) || latShare(ready) < FRAG_LAT_SHARE;
                 } else if (haveAct && WC > 1e-9) {
                     // Serving gaps early is only worth it if the batch is not so
                     // small that its per-token edge cost starves everything else.
@@ -711,8 +744,11 @@ int main() {
                             fire = (rD >= rP);
                         }
                     }
-                    if (meanOpenGap > 8.0 * SLO2) fire = true;  // starvation escape
                 }
+                // Starvation escape: waiting for a bigger cohort is only free
+                // while nothing is being scored, so it can never outlast the
+                // gap budget of a request that already has a token.
+                if (!fire && WC > 1e-9 && meanOpenGap > 8.0 * SLO2) fire = true;
             }
 
             if (fire) {
@@ -732,6 +768,7 @@ int main() {
                         bmove(rid, -1);
                     }
                     ac('\n');
+                    nDecFlight += (int)batch.size();
                     edgeFree = false;
                     running++;
                     nAssigned++;
@@ -774,9 +811,26 @@ int main() {
                 break;
             }
             if (best < 0) best = BK[B_ARR].back();
+            // Every distinct cloud in a decode group costs one link latency in
+            // each direction, every round. Spreading the input stage over more
+            // clouds than it can keep busy therefore buys nothing and is paid
+            // for on every later round, so use only as many clouds as the input
+            // stage's own arrival rate needs -- and only while the latency that
+            // saves outweighs the longer cloud task a denser group implies.
+            int kuse = K;
+            if (K > 1 && feedW > 0) {
+                int need = (int)ceil(cloudW / feedW * (double)KUSE_MARGIN);
+                if (need < 1) need = 1;
+                if (need < K) {
+                    double saved = 2.0 * (double)(K - need) * LAT;
+                    double added = tDproc.get(ceil((double)M_EFF / need)) -
+                                   tDproc.get(ceil((double)M_EFF / K));
+                    if (saved > added) kuse = need;
+                }
+            }
             int c = 0;
             double bl = 1e300;
-            for (int i = 0; i < K; ++i) {
+            for (int i = 0; i < kuse; ++i) {
                 double load = nPre[i] * (S + tPproc.get(R[best].lin)) +
                               nDec[i] * (S + tDproc.get(max(1, nDec[i])));
                 if (load < bl) {
@@ -896,6 +950,7 @@ int main() {
                     bmove(rid, -1);
                 }
                 ac('\n');
+                nDecFlight += (int)batch.size();
                 edgeFree = false;
                 running++;
                 nAssigned++;

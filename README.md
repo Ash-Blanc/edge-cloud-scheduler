@@ -55,6 +55,20 @@ Two consequences of the definitions drive the design:
   finishes before a new decode round so TDR stops growing. On high-link-latency
   throughput tests, decode posts wait for the other running cloud groups and
   coalesce, amortising one edge schedule over a larger batch.
+- **An idle edge is not a reason to fire.** A round pays one link latency per
+  participating cloud in each direction whatever it carries, and both links are
+  FIFO-shared by every round. Once the input stage runs dry the cohort used to be
+  fired with whatever happened to be ready, which on a slow link shattered it
+  into rounds of one or two: the links saturated on per-round latency while every
+  machine idled. Members still inside a round come back and enlarge the cohort
+  for nothing but makespan, so they are waited for — but only where that fixed
+  latency actually dominates the round, and only while some round is still in
+  flight to wait for.
+- **Cloud pool sized by capacity, not by `K`.** Spreading the input stage over
+  more clouds than it can keep busy buys nothing and is then paid for on every
+  later round. The pool is the input stage's own cloud work divided by the rate
+  the edge and the links can feed it, and it is only narrowed while the latency
+  that saves beats the longer cloud task a denser decode group implies.
 - **Prefill.** Shortest-job-first (mean TDR is a mean completion time, which SJF
   minimises), least-loaded cloud assignment, and `P PROC` split into pieces only
   when the per-piece `S` overhead stays a few percent of the work it protects.
@@ -77,16 +91,40 @@ single request), and a worst-case `R=2000` run.
 ```
 python3 tests/sim.py bench/v1 ./sched      # A/B any two builds
 python3 tests/sim.py --detail tp-sat-K8 ./sched   # per-task-type breakdown
+python3 tests/lbcheck.py ./sched           # makespan vs resource lower bound
+python3 tests/sweep.py ./sched             # same, over a grid of shapes
+python3 tests/diag.py hilat-K16 ./sched    # idle-with-work per resource
 ```
 
-Against the previous submission (`bench/v1_13k.cpp`, 13137.7 on the preliminary
-tests) across 23 local cases: **+293 points total**, no failures, mean TDR
-roughly halved, and 0.09s vs 0.28s of scheduler CPU on the `R=2000` stress case.
+`lbcheck.py` is the tool that says whether a case has anything left to win. It
+prices the input stage's unbatchable work on each resource — edge, each cloud,
+each link — plus the total tokens at the best achievable decode rate, and reports
+the makespan as a multiple of the largest. A case sitting at `x1.00` is capped by
+work no schedule can avoid; the high-link-latency shapes sat at `x2.7`–`x4.3`.
+
+Three cases exist specifically to pin down the regime where a judge test returned
+byte-identical metrics under three different scheduling policies:
+
+- `tp-lat-sat-K16`, `tp-lat-sat-K4` — saturated, link-latency bound, throughput
+  the whole score. The input stage runs dry long before the run ends, so the
+  cohort has nothing to hide behind and shatters. Metrics here are invariant to
+  `EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, `POST_HOLD_WTP`, `POST_LAT_RATIO` and
+  `PPOST_FIRST_WTP` — every one of those is either weight-gated off or applies to
+  a decision the shattered pipeline never reaches.
+- `tp-prefill-K1` — one cloud, maximal inputs. Mean TDR runs to ~900k purely from
+  queueing and `tp` is a fiftieth of the decode-only ideal, but the makespan
+  *equals* the unbatchable prefill work (`x1.00`), so no schedule can beat it.
+  It is here to stop a change mistaking that shape for slack.
+
+Across the 26 local cases the cohort-fragmentation fix is **+1068 points** with
+no failures, and it also cuts scheduler CPU on the shattering shapes from 0.19s
+to 0.02s because there are an order of magnitude fewer frames.
 
 ## Tuning knobs
 
-`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, and the guarded edge-order thresholds
-are compile-time macros so variants can be swept without editing code:
+`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, `FRAG_LAT_SHARE`, `KUSE_MARGIN` and the
+guarded edge-order thresholds are compile-time macros so variants can be swept
+without editing code:
 
 ```bash
 g++ -O2 -std=c++17 -DTHR_FLOOR=0.7 -o /tmp/variant solution.cpp
