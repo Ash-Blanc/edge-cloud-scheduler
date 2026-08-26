@@ -64,6 +64,16 @@ Two consequences of the definitions drive the design:
   for nothing but makespan, so they are waited for — but only where that fixed
   latency actually dominates the round, and only while some round is still in
   flight to wait for.
+- **Round sync while a link-bound input stage feeds; staggered rounds after.**
+  Every decode round pays `k*LAT` on each link whatever it carries. While the
+  input stage is still draining and the links are its binding resource, that
+  fixed cost comes straight out of the drain rate that sets the makespan, so
+  sub-cohort clumps wait for the in-flight round and coalesce into one round
+  per return. Once the input stage is dry, the objective is evaluated on plans
+  that split the pool into `g` cohorts circulating in antiphase (each member's
+  gap is the cycle, the pool makes `g*m` tokens per cycle, and the cycle is
+  floored by `g` times the largest single-resource phase), which keeps edge,
+  links and clouds simultaneously busy where no one resource saturates.
 - **Cloud pool sized by capacity, not by `K`.** Spreading the input stage over
   more clouds than it can keep busy buys nothing and is then paid for on every
   later round. The pool is the input stage's own cloud work divided by the rate
@@ -122,9 +132,10 @@ to 0.02s because there are an order of magnitude fewer frames.
 
 ## Tuning knobs
 
-`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, `FRAG_LAT_SHARE`, `KUSE_MARGIN` and the
-guarded edge-order thresholds are compile-time macros so variants can be swept
-without editing code:
+`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, `FRAG_LAT_SHARE`, `KUSE_MARGIN`,
+`PIPE_MODE`, `PIPE_GCAP`, `PIPE_SYNC_WTP`, `POST_EDGEBOUND` and the guarded
+edge-order thresholds are compile-time macros so variants can be swept without
+editing code:
 
 ```bash
 g++ -O2 -std=c++17 -DTHR_FLOOR=0.7 -o /tmp/variant solution.cpp

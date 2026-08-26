@@ -208,6 +208,34 @@ enum : int {
 #ifndef KUSE_MARGIN
 #define KUSE_MARGIN 1.08
 #endif
+// Decode round pipelining: a round is edge -> uplink -> cloud -> downlink, four
+// distinct resources, so g cohorts in antiphase multiply the token rate until
+// one resource saturates (cycle >= g * its phase). 0 disables, 1 engages only
+// while no prefill wants the edge, so the extra D PRE / D POST edge cost can
+// never starve the input stage (per-cloud decode rounds measured -997 when it
+// did).
+#ifndef PIPE_MODE
+#define PIPE_MODE 1
+#endif
+#ifndef PIPE_GCAP
+#define PIPE_GCAP 8
+#endif
+// While the input stage still has requests in flight anywhere (nPrefPend > 0)
+// and the *links* are its binding resource, every decode round bills its fixed
+// k*LAT to the very resource whose drain rate sets the makespan. Rounds are
+// then synchronized: wait for the in-flight round to land and fire one
+// coalesced round instead of trickling. Where the input stage is edge- or
+// cloud-bound the wait would only idle the edge, and once the input stage is
+// drained the trickle is organic pipelining, so the sync stays off there.
+#ifndef PIPE_SYNC_WTP
+#define PIPE_SYNC_WTP 0.3
+#endif
+// Coalesce D POST while cloud groups are still returning also when the edge is
+// the input stage's binding resource: every merged post refunds one S to the
+// resource that sets the makespan.
+#ifndef POST_EDGEBOUND
+#define POST_EDGEBOUND 1
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -233,6 +261,24 @@ static inline double roundT(int m) {
     return round_time(m);
 }
 
+// Largest single-resource phase of a round of m: the spacing at which staggered
+// cohorts can follow each other before that resource saturates.
+static double phase_max(int m) {
+    if (m < 1) m = 1;
+    int k = min(K, m);
+    double per = ceil((double)m / k);
+    double edge = 2.0 * S + tDpre.get(m) + tDpost.get(m);
+    double link = k * LAT + 8.0 * (double)m * BPT / (BW * 1e6);
+    double proc = S + tDproc.get(per);
+    return max(edge, max(link, proc));
+}
+
+static vector<double> phaseCache;
+static inline double phaseT(int m) {
+    if (m >= 1 && m < (int)phaseCache.size()) return phaseCache[m];
+    return phase_max(m);
+}
+
 // Fraction of a round of m that is fixed link latency. A round pays LAT once
 // per participating cloud in each direction whatever it carries, so this is the
 // part of the round that a larger cohort amortises and a smaller one repeats.
@@ -243,16 +289,29 @@ static inline double latShare(int m) {
 
 static inline double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
-// The judge's own formula, evaluated on the cohort we are considering.
-static double objective(int m, double ex_tdr, double infl) {
-    double rt = roundT(m);
+// The judge's own formula, evaluated on the plan being considered: the decode
+// pool split into g cohorts of m circulating in antiphase. Each member is
+// served once per cycle, so its gap is the cycle, and the pool produces g*m
+// tokens per cycle. g == 1 is exactly the old single-cohort model.
+static double objective(int m, double ex_tdr, double infl, int pool, int gAllow,
+                        double* rateOut) {
+    int g = 1;
+    if (gAllow > 1 && m < pool) {
+        g = pool / m;
+        if (g > gAllow) g = gAllow;
+        if (g < 1) g = 1;
+    }
+    double cyc = roundT(m);
+    if (g > 1) cyc = max(cyc, (double)g * phaseT(m));
+    double toks = (double)m * g;
     double ntp = 0.0;
-    if (TPUB > TPBASE) ntp = clamp01(((double)m / rt - TPBASE) / (TPUB - TPBASE));
-    double ex_tpot = max(0.0, (rt * infl - SLO2) / SLO2);
+    if (TPUB > TPBASE) ntp = clamp01((toks / cyc - TPBASE) / (TPUB - TPBASE));
+    double ex_tpot = max(0.0, (cyc * infl - SLO2) / SLO2);
     double dist = sqrt(ex_tdr * ex_tdr + ex_tpot * ex_tpot);
     double nc;
     if (DBASE > 0) nc = max(0.0, 1.0 - dist / DBASE);
     else nc = (dist <= 1e-12) ? 1.0 : 0.0;
+    if (rateOut) *rateOut = toks / cyc;
     return WTP * ntp + WC * nc;
 }
 
@@ -347,7 +406,11 @@ int main() {
 
     const int MAXM = 4097;
     roundCache.resize(MAXM);
-    for (int m = 1; m < MAXM; ++m) roundCache[m] = round_time(m);
+    phaseCache.resize(MAXM);
+    for (int m = 1; m < MAXM; ++m) {
+        roundCache[m] = round_time(m);
+        phaseCache[m] = phase_max(m);
+    }
 
     // Cohort size past which extra members stop paying for themselves.
     int M_EFF = 1, M_FLOOR = 1;
@@ -402,7 +465,7 @@ int main() {
     long long nTdr = 0;
     double sumGap = 0;
     long long nGap = 0;
-    double cloudW = 0, feedW = 0;
+    double cloudW = 0, feedW = 0, edgeW = 0, linkW = 0;
 
     vector<int> finBuf, ridBuf, batch;
 
@@ -455,6 +518,8 @@ int main() {
                 cloudW += S + tPproc.get(r.lin);
                 feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin),
                              xfer(r.lin));
+                edgeW += 2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin);
+                linkW += xfer(r.lin);
             } else if (e0 == 'F') {  // FIN rid
                 long long rid = 0;
                 io::rint(rid);
@@ -631,8 +696,27 @@ int main() {
 
         // ---- edge ----
         bool edgeBusyNow = !edgeFree;
+        bool prefWork = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
+        // Pipelining engages only while no prefill wants the edge: firing more
+        // rounds then converts an idle edge into token rate, and can never
+        // starve the input stage. dist_base == 0 keeps the single-cohort model
+        // because its SLO2 cap is stated in single-round terms.
+        int poolD = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
+        int gAllow = 1;
+        if (PIPE_MODE >= 1 && WTP > 1e-9 && !prefWork && !(DBASE <= 0 && WC > 1e-9))
+            gAllow = PIPE_GCAP;
+        // Which resource the input stage saturates first, from the same request
+        // sums the cloud-pool sizing uses. When it is the edge, every merged
+        // D POST refunds one S to the resource that sets the makespan -- but
+        // only while the edge has prefill to run instead, so holding never
+        // trades an idle edge for the refund. Holding is off entirely while
+        // rounds are deliberately staggered: merging their posts would collapse
+        // the stagger back into one synchronized cohort.
+        bool edgeBoundIn = edgeW * (double)K >= cloudW && edgeW >= linkW;
         bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
-                         WTP >= POST_HOLD_WTP && LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
+                         gAllow <= 1 && WTP >= POST_HOLD_WTP &&
+                         (LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
+                          (POST_EDGEBOUND && edgeBoundIn && prefWork)) &&
                          !(DBASE <= 0 && WC > 1e-9);
         if (edgeFree && !BK[B_DPOST].empty() && !holdDpost) {
             batch = BK[B_DPOST];
@@ -682,33 +766,57 @@ int main() {
         {
             double best = -1;
             int hi = min(4096, max(1, M_EFF));
-            for (int m = 1;;) {
-                double v = objective(m, exTdr, infl);
-                if (v >= best - 1e-12) {
-                    best = max(best, v);
-                    mDesign = m;
+            if (gAllow > 1) {
+                // The fixed M_FLOOR is a single-cohort notion; under pipelining
+                // the same protection is a floor on the pooled token rate.
+                double bestRate = 0;
+                for (int m = 1;;) {
+                    double r;
+                    objective(m, exTdr, infl, poolD, gAllow, &r);
+                    bestRate = max(bestRate, r);
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
                 }
-                if (m >= hi) break;
-                m = min(hi, m + max(1, m / 8));
-            }
-            // dist_base == 0 makes the waiting-time component all-or-nothing:
-            // any excess at all forfeits the whole w_c share. When the target is
-            // still reachable, protect it rather than trusting the tdr estimate.
-            if (WTP > 1e-9) mDesign = max(mDesign, min(hi, M_FLOOR));
-            if (DBASE <= 0 && WC > 1e-9 && roundT(1) * infl <= SLO2) {
-                int cap = 1;
-                for (int m = 1; m <= hi; ++m) {
-                    if (roundT(m) * infl <= SLO2) cap = m;
-                    else break;
+                for (int m = 1;;) {
+                    double r;
+                    double v = objective(m, exTdr, infl, poolD, gAllow, &r);
+                    if (r + 1e-12 >= THR_FLOOR * bestRate && v >= best - 1e-12) {
+                        best = max(best, v);
+                        mDesign = m;
+                    }
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
                 }
-                mDesign = min(mDesign, cap);
+            } else {
+                for (int m = 1;;) {
+                    double v = objective(m, exTdr, infl, poolD, 1, nullptr);
+                    if (v >= best - 1e-12) {
+                        best = max(best, v);
+                        mDesign = m;
+                    }
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
+                }
+                // dist_base == 0 makes the waiting-time component all-or-nothing:
+                // any excess at all forfeits the whole w_c share. When the target
+                // is still reachable, protect it rather than trusting the tdr
+                // estimate.
+                if (WTP > 1e-9) mDesign = max(mDesign, min(hi, M_FLOOR));
+                if (DBASE <= 0 && WC > 1e-9 && roundT(1) * infl <= SLO2) {
+                    int cap = 1;
+                    for (int m = 1; m <= hi; ++m) {
+                        if (roundT(m) * infl <= SLO2) cap = m;
+                        else break;
+                    }
+                    mDesign = min(mDesign, cap);
+                }
             }
         }
 
         if (edgeFree) {
             bool haveAct = !BK[B_ACT].empty();
             bool haveFresh = !BK[B_FRESH].empty();
-            bool havePrefill = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
+            bool havePrefill = prefWork;
             int ready = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size();
 
             bool fire = false;
@@ -723,8 +831,16 @@ int main() {
                     // saturate the links while every machine idles. Members still
                     // inside a round return and enlarge this cohort for nothing
                     // but makespan, so wait for them -- but only in that regime,
-                    // and only while there is something left to wait for.
-                    fire = (nDecFlight == 0) || latShare(ready) < FRAG_LAT_SHARE;
+                    // and only while there is something left to wait for. While
+                    // a link-bound input stage is still feeding, the same holds
+                    // at any latency share: every extra round bills its fixed
+                    // k*LAT to the links whose drain rate sets the makespan, so
+                    // clumps wait and coalesce into one round per return.
+                    bool linkBoundIn = linkW >= edgeW && linkW * (double)K >= cloudW;
+                    bool sync = latShare(ready) >= FRAG_LAT_SHARE ||
+                                (nPrefPend > 0 && linkBoundIn &&
+                                 WTP >= PIPE_SYNC_WTP && !(DBASE <= 0 && WC > 1e-9));
+                    fire = (nDecFlight == 0) || !sync;
                 } else if (haveAct && WC > 1e-9) {
                     // Serving gaps early is only worth it if the batch is not so
                     // small that its per-token edge cost starves everything else.
@@ -753,10 +869,32 @@ int main() {
 
             if (fire) {
                 batch.clear();
-                for (int rid : BK[B_ACT]) batch.push_back(rid);
-                int room = mDesign - nActive;
-                for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0; --i, --room)
-                    batch.push_back(BK[B_FRESH][i]);
+                if (gAllow > 1) {
+                    // One round of the plan, not the whole pool: members left
+                    // behind form the next round in antiphase. Longest open gap
+                    // rides first so the stagger stays fair per request.
+                    int seats = mDesign;
+                    if ((int)BK[B_ACT].size() > seats) {
+                        batch = BK[B_ACT];
+                        nth_element(batch.begin(), batch.begin() + seats, batch.end(),
+                                    [&](int a, int b) {
+                                        return R[a].last_tok < R[b].last_tok;
+                                    });
+                        batch.resize(seats);
+                    } else {
+                        batch = BK[B_ACT];
+                    }
+                    int room = seats - (int)batch.size();
+                    for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0;
+                         --i, --room)
+                        batch.push_back(BK[B_FRESH][i]);
+                } else {
+                    for (int rid : BK[B_ACT]) batch.push_back(rid);
+                    int room = mDesign - nActive;
+                    for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0;
+                         --i, --room)
+                        batch.push_back(BK[B_FRESH][i]);
+                }
                 if (!batch.empty()) {
                     sort(batch.begin(), batch.end());
                     as("E D PRE -1 ");
