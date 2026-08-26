@@ -205,6 +205,9 @@ enum : int {
 #ifndef TPOT_DOM
 #define TPOT_DOM 1.0
 #endif
+#ifndef PREFILL_WORKLOAD_WTP
+#define PREFILL_WORKLOAD_WTP 0.15
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -454,6 +457,12 @@ int main() {
     vector<int> nDecPend(K, 0);
     // Cohort members assigned to each cloud, for as long as they are decoding.
     vector<int> nJoinC(K, 0);
+    // Queue-inclusive prefill service committed to each cloud.  A request
+    // count is not a load when input lengths differ: dispatching by count can
+    // put a short request behind one very long P PROC while another cloud has
+    // several tiny jobs.  The running task remains in preWork until TDN; its
+    // elapsed portion is removed when comparing predicted completion times.
+    vector<double> preWork(K, 0.0), preRunStart(K, -1.0);
 
     // Lazy heaps give shortest-job-first prefill order without rescanning.
     typedef pair<double, int> PDI;
@@ -549,10 +558,16 @@ int main() {
                         io::rdbl(dur);
                         int rid = (int)d;
                         Req& r = R[rid];
+                        if (cl >= 0 && cl < K) {
+                            preWork[cl] = max(0.0, preWork[cl] - (S + dur));
+                            preRunStart[cl] = -1.0;
+                        }
                         if (r.next_ls >= LAYERS) {
                             setSt(rid, ST_PDOWN_WAIT);
                             xfers++;  // last piece queues the input-stage DOWN
                         } else {
+                            // The next piece incurs a fresh scheduling cost.
+                            if (cl >= 0 && cl < K) preWork[cl] += S;
                             setSt(rid, ST_PPROC_READY);
                             bmove(rid, B_PPROC + r.cloud);
                             qProc[r.cloud].push(PDI(tPproc.get(r.lin) *
@@ -1004,8 +1019,14 @@ int main() {
             }
             for (int i = 0; i < K; ++i) {
                 if (avoidDec && nJoinC[i]) continue;
-                double load = nPre[i] * (S + tPproc.get(R[best].lin)) +
-                              nDec[i] * (S + tDproc.get(max(1, nDec[i])));
+                double preLoad;
+                if (WTP <= PREFILL_WORKLOAD_WTP + 1e-12) {
+                    double elapsed = preRunStart[i] >= 0.0 ? now - preRunStart[i] : 0.0;
+                    preLoad = max(0.0, preWork[i] - elapsed);
+                } else {
+                    preLoad = nPre[i] * (S + tPproc.get(R[best].lin));
+                }
+                double load = preLoad + nDec[i] * (S + tDproc.get(max(1, nDec[i])));
                 if (load < bl) {
                     bl = load;
                     c = i;
@@ -1018,6 +1039,7 @@ int main() {
             ac('\n');
             R[best].cloud = c;
             nPre[c]++;
+            preWork[c] += S + tPproc.get(R[best].lin);
             setSt(best, ST_PPRE_RUN);
             bmove(best, -1);
             edgeFree = false;
@@ -1122,6 +1144,7 @@ int main() {
             setSt(best, ST_PPROC_RUN);
             bmove(best, -1);
             cloudFree[c] = 0;
+            preRunStart[c] = now;
             running++;
             nAssigned++;
         }
