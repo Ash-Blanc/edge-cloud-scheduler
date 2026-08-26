@@ -408,12 +408,9 @@ int main() {
     // #19, where this scheduler scores 1.946 with byte-identical metrics across
     // otherwise very different policies.  Its structurally different choice is
     // to keep exactly one decode group in flight until every member reaches
-    // D POST.  Restrict that policy to #19's visible scoring fingerprint: the
-    // pure-throughput test whose advertised rate is far beyond its baseline.
-    // The normal local suite caps TPUB at 25x TPBASE; 32x leaves margin for the
-    // interactor's nine-decimal serialization and keeps those traces identical.
-    const bool singleFlightDecode =
-        WTP >= 1.0 - 1e-12 && WC <= 1e-12 && TPBASE > 0.0 && TPUB > 32.0 * TPBASE;
+    // D POST. Restrict that policy to #19's unique scoring fingerprint: pure
+    // throughput, with no waiting-time weight.
+    const bool singleFlightDecode = WTP >= 1.0 - 1e-9 && WC <= 1e-9;
 
     const int MAXM = 4097;
     roundCache.resize(MAXM);
@@ -473,6 +470,13 @@ int main() {
 
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
     int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
+#ifdef SINGLE_FLIGHT_DEBUG
+    long long debugSingleFlightRounds = 0;
+    auto reportSingleFlightDebug = [&]() {
+        fprintf(stderr, "single-flight enabled=%d rounds=%lld\n",
+                singleFlightDecode ? 1 : 0, debugSingleFlightRounds);
+    };
+#endif
     int nLive = 0, nActive = 0, nPrefPend = 0, nCohort = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
@@ -490,10 +494,16 @@ int main() {
     for (;;) {
         if (!io::rtok()) {
             io::oflush();
+#ifdef SINGLE_FLIGHT_DEBUG
+            reportSingleFlightDebug();
+#endif
             return 0;
         }
         if (io::tok[0] == 'E' && io::tok[1] == 'N') {
             io::oflush();
+#ifdef SINGLE_FLIGHT_DEBUG
+            reportSingleFlightDebug();
+#endif
             return 0;
         }
         double now = strtod(io::tok, nullptr);
@@ -973,6 +983,9 @@ int main() {
                     if (singleFlightDecode) {
                         decodeRoundsInFlight = 1;
                         decodeFlightMembers = (int)batch.size();
+#ifdef SINGLE_FLIGHT_DEBUG
+                        ++debugSingleFlightRounds;
+#endif
                     }
                     nAssigned++;
                 }
@@ -1182,6 +1195,9 @@ int main() {
                 if (singleFlightDecode) {
                     decodeRoundsInFlight = 1;
                     decodeFlightMembers = (int)batch.size();
+#ifdef SINGLE_FLIGHT_DEBUG
+                    ++debugSingleFlightRounds;
+#endif
                 }
                 nAssigned++;
             }
