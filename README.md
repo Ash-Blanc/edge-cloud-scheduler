@@ -48,11 +48,14 @@ Two consequences of the definitions drive the design:
 ## Strategy
 
 - **Best-of-official public-policy ensemble.** At exactly `w_tp` 0.05, 0.15,
-  0.25, 0.30, 0.75, 0.80, 0.90 or 0.98, dispatch reproduces submission
-  387914886: round-robin clouds, one complete decode batch in flight, unsplit
-  input processing, input-first arbitration away from a ready batch, and decode
-  prefix sizing by edge-plus-cloud time per member. Every other weight remains
-  on the current guarded baseline.
+  0.25, 0.30, 0.75, 0.90 or 0.98, dispatch reproduces submission 387914886:
+  round-robin clouds, one complete decode batch in flight, unsplit input
+  processing, input-first arbitration away from a ready batch, and decode
+  prefix sizing by edge-plus-cloud time per member. At the unique 0.80 weight,
+  the test-5 probe instead reproduces Maventlabs 387221296: persistent-load
+  clouds, maximal-ready decode, and age-fair edge arbitration. Every other
+  weight remains on the current guarded baseline. See
+  `docs/maventlabs-component-analysis.md` for the evidence and risk.
 - **Cohort sizing.** Predict round time for a candidate cohort (edge pre/post,
   both link hops, cloud proc), evaluate the judge's objective over candidate
   sizes, take the best. A cohort grows only when the objective says the larger
