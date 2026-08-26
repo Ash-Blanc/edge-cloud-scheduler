@@ -51,6 +51,10 @@ Two consequences of the definitions drive the design:
 - **`dist_base == 0` is a cliff.** There the waiting-time component is all or
   nothing, so when the target is still reachable it is protected rather than
   traded.
+- **Weight-aware edge order.** On latency-heavy tests, ready `P POST` work
+  finishes before a new decode round so TDR stops growing. On high-link-latency
+  throughput tests, decode posts wait for the other running cloud groups and
+  coalesce, amortising one edge schedule over a larger batch.
 - **Prefill.** Shortest-job-first (mean TDR is a mean completion time, which SJF
   minimises), least-loaded cloud assignment, and `P PROC` split into pieces only
   when the per-piece `S` overhead stays a few percent of the work it protects.
@@ -81,8 +85,8 @@ roughly halved, and 0.08s vs 0.27s of scheduler CPU on the `R=2000` stress case.
 
 ## Tuning knobs
 
-`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR` are compile-time macros so variants can
-be swept without editing code:
+`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR`, and the guarded edge-order thresholds
+are compile-time macros so variants can be swept without editing code:
 
 ```bash
 g++ -O2 -std=c++17 -DTHR_FLOOR=0.7 -o /tmp/variant solution.cpp

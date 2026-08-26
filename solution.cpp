@@ -182,7 +182,21 @@ enum : int {
 #ifndef THR_FLOOR
 #define THR_FLOOR 0.5
 #endif
-
+#ifndef POST_HOLD_WTP
+#define POST_HOLD_WTP 0.3
+#endif
+#ifndef POST_LAT_RATIO
+#define POST_LAT_RATIO 2.0
+#endif
+#ifndef PPOST_FIRST_WTP
+#define PPOST_FIRST_WTP 0.4
+#endif
+#ifndef CHUNK_OVERHEAD
+#define CHUNK_OVERHEAD 0.05
+#endif
+#ifndef CHUNK_S_FACTOR
+#define CHUNK_S_FACTOR 20.0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -362,7 +376,7 @@ int main() {
     priority_queue<PDI, vector<PDI>, greater<PDI>> qArr;
     vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
-    long long running = 0, xfers = 0;
+    long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
     int nLive = 0, nActive = 0, nPrefPend = 0;
     double sumLastTok = 0, sumArrPend = 0;
     double sumTdr = 0;
@@ -497,8 +511,10 @@ int main() {
                         for (int c = 0; c < K; ++c)
                             if (seen[c]) xfers++;
                     } else if (isProc) {
+                        decProcRun--;
                         for (int rid : ridBuf) setSt(rid, ST_DDOWN_WAIT);
                         xfers++;
+                        decDown++;
                     } else {  // D POST: one token per member
                         for (int rid : ridBuf) {
                             Req& r = R[rid];
@@ -543,6 +559,7 @@ int main() {
                             bmove(rid, B_PPOST);
                         }
                     } else {
+                        if (!up) decDown--;
                         if (up) {
                             setSt(rid, ST_DPROC_READY);
                             bmove(rid, B_DPROC + r.cloud);
@@ -589,7 +606,10 @@ int main() {
 
         // ---- edge ----
         bool edgeBusyNow = !edgeFree;
-        if (edgeFree && !BK[B_DPOST].empty()) {
+        bool holdDpost = edgeFree && !BK[B_DPOST].empty() && (decDown > 0 || decProcRun > 0) &&
+                         WTP >= POST_HOLD_WTP && LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
+                         !(DBASE <= 0 && WC > 1e-9);
+        if (edgeFree && !BK[B_DPOST].empty() && !holdDpost) {
             batch = BK[B_DPOST];
             sort(batch.begin(), batch.end());
             as("E D POST -1 ");
@@ -601,6 +621,21 @@ int main() {
                 bmove(rid, -1);
             }
             ac('\n');
+            edgeFree = false;
+            running++;
+            nAssigned++;
+        }
+
+        if (edgeFree && WTP <= PPOST_FIRST_WTP && !BK[B_PPOST].empty()) {
+            int best = BK[B_PPOST][0];
+            double bw = 1e300;
+            for (int rid : BK[B_PPOST]) {
+                double w = tPpost.get(R[rid].lin);
+                if (w < bw) { bw = w; best = rid; }
+            }
+            as("E P POST "); ai(R[best].cloud); ac(' '); ai(best); ac('\n');
+            setSt(best, ST_PPOST_RUN);
+            bmove(best, -1);
             edgeFree = false;
             running++;
             nAssigned++;
@@ -784,6 +819,7 @@ int main() {
                 ac('\n');
                 cloudFree[c] = 0;
                 running++;
+                decProcRun++;
                 nAssigned++;
                 continue;
             }
@@ -810,9 +846,9 @@ int main() {
                 double perLayer = tPproc.get(r.lin) / LAYERS;
                 // Every piece pays S again, so only split when that overhead
                 // stays under a few percent of the prefill it protects.
-                int maxPieces = (int)floor(0.05 * full / S);
+                int maxPieces = (int)floor(CHUNK_OVERHEAD * full / S);
                 if (maxPieces >= 2) {
-                    double budget = max(20.0 * S, SLO2);
+                    double budget = max(CHUNK_S_FACTOR * S, SLO2);
                     int byBudget = (int)floor(budget / max(perLayer, 1e-9));
                     int byOverhead = (remain + maxPieces - 1) / maxPieces;
                     take = max(1, max(byBudget, byOverhead));
