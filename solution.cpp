@@ -170,6 +170,13 @@ enum : int {
     ST_FIN
 };
 
+#ifndef EFF_RATIO
+#define EFF_RATIO 1.1
+#endif
+#ifndef EFF_PLATEAU
+#define EFF_PLATEAU 0.97
+#endif
+
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -315,7 +322,7 @@ int main() {
             }
         }
         for (int m = 1; m <= M_EFF; ++m) {
-            if (m / roundT(m) >= 0.97 * best) {
+            if (m / roundT(m) >= EFF_PLATEAU * best) {
                 M_EFF = m;
                 break;
             }
@@ -642,7 +649,7 @@ int main() {
                         (2.0 * S + tDpre.get(ready) + tDpost.get(ready)) / max(1, ready);
                     double ptcBest =
                         (2.0 * S + tDpre.get(mDesign) + tDpost.get(mDesign)) / max(1, mDesign);
-                    bool efficient = ptcNow <= 1.6 * ptcBest;
+                    bool efficient = ptcNow <= EFF_RATIO * ptcBest;
                     double pred = meanOpenGap + roundT(max(1, nActive));
                     if (efficient && pred >= SLO2 * 0.85) {
                         if (pred <= SLO2 * 2.0) fire = true;

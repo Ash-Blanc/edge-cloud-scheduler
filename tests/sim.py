@@ -446,6 +446,12 @@ def build_cases():
     c.append(make_case("hi-lat-K8", 42, 8, 220, 16, 300.0, 0.35, 0.15, 0.15, lat=35.0, bw=1.0))
     # Large schedule cost: every task pays S, so task count matters most.
     c.append(make_case("bigS-K4", 51, 4, 200, 8, 400.0, 0.60, 0.15, 0.15, S=9.0))
+    # Degenerate shapes the statement warns about; these only need to survive.
+    c.append(make_case("edge-R1", 81, 1, 1, 1, 1.0, 0.50, 0.5, 0.5, lin_hi=16, lout_hi=1))
+    c.append(make_case("edge-K1L1", 82, 1, 25, 1, 100.0, 0.50, 0.5, 0.5, lout_hi=8))
+    c.append(make_case("edge-lout1", 83, 4, 40, 8, 100.0, 0.70, 0.5, 0.5, lout_hi=1))
+    c.append(make_case("edge-tinySLO", 84, 2, 40, 4, 50.0, 0.20, 0.01, 0.01))
+    c.append(make_case("edge-1cloud-big", 85, 1, 40, 64, 300.0, 0.60, 0.3, 0.3, lin_hi=4096))
     # Long outputs, few requests: decode-dominated.
     c.append(make_case("longout-K4", 61, 4, 60, 8, 200.0, 0.55, 0.20, 0.20, lout_hi=512))
     # Wide inputs: prefill-dominated.
