@@ -1,48 +1,89 @@
 # Edge–Cloud Collaborative Scheduler
 
-C++ interactive scheduler for [Codeforces 2251A](https://codeforces.com/contest/2251/problem/A) (ICPC 2026 Online Challenge 1 powered by Huawei).
+C++ interactive scheduler for [Codeforces 2251A](https://codeforces.com/contest/2251/problem/A) (ICPC 2026 Online Challenge 1, powered by Huawei).
 
-The program talks to the contest interactor over stdin/stdout. After every event frame it assigns at most one task to the edge machine and at most one task to each cloud worker.
+Submit `solution.cpp`.
 
-## Build
-
-```bash
-g++ -O2 -std=c++17 -o sched solution.cpp
-```
-
-Submit `solution.cpp` on Codeforces (GNU G++17 / G++20). Flush is already handled.
-
-## Local checks
-
-Example 1 from the statement (protocol replay):
+## Build and check
 
 ```bash
-g++ -O2 -std=c++17 -o sched solution.cpp
-./sched < tests/example1.in | diff -u tests/example1.out -
+make            # builds ./sched
+make test       # replays statement Example 1, then runs the local judge
 ```
 
-Synthetic interactor (catches illegal commands / stuck states):
+## What the judge rewards
+
+```
+score = w_tp * clamp((tp - tp_base)/(tp_UB - tp_base))
+      + w_c  * (dist_base > 0 ? max(0, 1 - dist/dist_base) : (dist == 0))
+dist  = hypot(excess(mean_tdr, SLO1), excess(mean_tpot, SLO2))
+```
+
+Every constant above arrives in the input, so the scheduler evaluates this
+formula directly instead of using hand-set thresholds.
+
+Two consequences of the definitions drive the design:
+
+1. **TDR ends at `P POST`, and TPOT only averages gaps _between_ tokens.** The
+   interval from `P POST` to a request's *first* token is therefore scored by
+   nothing. Holding a not-yet-decoding request costs only makespan, which buys
+   large decode cohorts for free.
+2. **Every cohort member is served once per decode round**, so its TPOT
+   converges to the round time. Round time is the quantity to steer.
+
+## Strategy
+
+- **Cohort sizing.** Predict round time for a candidate cohort (edge pre/post,
+  both link hops, cloud proc), evaluate the judge's objective over candidate
+  sizes, take the best. A cohort grows only when the objective says the larger
+  round still pays.
+- **Accumulate on prefill.** Rather than firing `D PRE` whenever anything is
+  ready, wait for the target cohort and spend the wait on prefill, which is
+  productive. Fire early only when the edge would otherwise idle, when gaps are
+  about to breach SLO2, or when the batch is already efficient.
+- **Measured feedback.** A modelled round is optimistic: real gaps include
+  interleaved prefill and pipeline stalls. An inflation factor measured from
+  observed gaps corrects the prediction. Without it the optimiser chases an
+  unreachable round time and shrinks the cohort to nothing.
+- **Throughput floor.** Shrinking a cohort to protect TPOT also lengthens every
+  queue, which feeds back into TDR and makespan — a coupling the model does not
+  capture. The cohort may not give up more than half the peak token rate.
+- **`dist_base == 0` is a cliff.** There the waiting-time component is all or
+  nothing, so when the target is still reachable it is protected rather than
+  traded.
+- **Prefill.** Shortest-job-first (mean TDR is a mean completion time, which SJF
+  minimises), least-loaded cloud assignment, and `P PROC` split into pieces only
+  when the per-piece `S` overhead stays a few percent of the work it protects.
+- **I/O.** `read`/`write` buffers with token parsing. `fread` would block until
+  its buffer filled, which deadlocks against an interactor awaiting a response.
+
+## Local judge
+
+`tests/sim.py` implements the statement's timing model (FIFO uplink/downlink,
+schedule cost `S`, piecewise-linear task-time table) and validates every
+assignment, so illegal commands and stuck states surface locally.
+
+`tp_base` and `dist_base` are measured by first running
+`bench/ref_sequential.cpp` (one request at a time) on the same workload, which
+is how the real judge defines them. Cases span saturated/throughput-dominant,
+latency-dominant, high link latency, large `S`, near-flat decode scaling, the
+degenerate shapes the statement calls out (`K=1`, `num_layers=1`, `L_out=1`,
+single request), and a worst-case `R=2000` run.
+
+```
+python3 tests/sim.py bench/v1 ./sched      # A/B any two builds
+python3 tests/sim.py --detail tp-sat-K8 ./sched   # per-task-type breakdown
+```
+
+Against the previous submission (`bench/v1_13k.cpp`, 13137.7 on the preliminary
+tests) across 23 local cases: **+227 points total (+4%)**, no failures, mean TDR
+roughly halved, and 0.08s vs 0.27s of scheduler CPU on the `R=2000` stress case.
+
+## Tuning knobs
+
+`EFF_RATIO`, `EFF_PLATEAU`, `THR_FLOOR` are compile-time macros so variants can
+be swept without editing code:
 
 ```bash
-python3 tests/sim.py ./sched
+g++ -O2 -std=c++17 -DTHR_FLOOR=0.7 -o /tmp/variant solution.cpp
 ```
-
-## Strategy (relative to a 13k greedy)
-
-The original greedy is kept as the skeleton:
-
-- Never idle a free machine when a legal task exists.
-- Batch **all** currently ready decode work (`D PRE` / `D PROC` / `D POST`).
-- Edge order: `D POST` → `P POST` → `D PRE` → `P PRE`.
-- Cloud order: `D PROC` before `P PROC`.
-- Full-range `P PROC [0, num_layers)`.
-
-What changed, carefully:
-
-1. **Least-loaded cloud assignment** instead of round-robin. Load is remaining prefill compute (`S + prefill_proc(L_in)`) plus a lighter decode term that uses the task-time table, `w_c`, and a running average of finished `L_out`. Near-ties still rotate so homogeneous jobs stay spread.
-2. **Oldest-first urgency** on `P PRE` / `P POST` / `P PROC` using wait / `SLO1`.
-3. **Live-request scan** so 2e6-frame tests stay inside the 15s limit.
-
-`L_out` is hidden until `FIN`, so remaining decode work is estimated, not known.
-
-Aggressive extras that *looked* promising (idling a cloud for an incoming decode, SLO2 batch caps, many prefill chunks, always running `D PRE` before `P POST`) were tried locally and **hurt** throughput / TDR. They are not in this submission.

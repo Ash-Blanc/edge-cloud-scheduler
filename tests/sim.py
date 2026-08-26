@@ -16,6 +16,7 @@ from __future__ import annotations
 import heapq
 import math
 import random
+import resource
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -297,6 +298,7 @@ class Sim:
 def run(binary: str, case: Case, timeout=120.0):
     sim = Sim(case)
     c = case
+    ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
     proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             text=True, bufsize=1)
     hdr = [f"{c.K} {c.S:.9f} {c.lat:.9f} {c.bw:.9f} {c.bpt} {c.layers}",
@@ -316,6 +318,8 @@ def run(binary: str, case: Case, timeout=120.0):
                 proc.stdin.flush()
                 proc.stdin.close()
                 proc.wait(timeout=10)
+                ru1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+                sim.cpu = (ru1.ru_utime - ru0.ru_utime) + (ru1.ru_stime - ru0.ru_stime)
                 return sim.metrics(), frames, sim
             raise RuntimeError("stuck: no future event with unfinished requests")
         t, evs = sim.frame()
@@ -465,6 +469,9 @@ def build_cases():
     c.append(make_case("edge-lout1", 83, 4, 40, 8, 100.0, 0.70, 0.5, 0.5, lout_hi=1))
     c.append(make_case("edge-tinySLO", 84, 2, 40, 4, 50.0, 0.20, 0.01, 0.01))
     c.append(make_case("edge-1cloud-big", 85, 1, 40, 64, 300.0, 0.60, 0.3, 0.3, lin_hi=4096))
+    # Worst-case size: R and total tokens at the stated limits, to check CPU.
+    c.append(make_case("stress-R2000", 99, 8, 2000, 64, 200.0, 0.90, 0.10, 0.10,
+                       kind="flat", lout_hi=128))
     # Near-flat decode scaling: huge cohorts should pay off enormously.
     c.append(make_case("flat-sat-K8", 91, 8, 800, 16, 100.0, 1.00, 0.05, 0.05, kind="flat"))
     c.append(make_case("flat-sat-K4", 92, 4, 500, 8, 100.0, 0.60, 0.10, 0.10, kind="flat"))
@@ -530,7 +537,8 @@ def detail(bins, case_name):
         pts, ntp, nc, dist = score(c, m)
         tp, tdr, tpot = m
         print(f"\n=== {b.split('/')[-1]} on {case_name}: pts={pts:.1f} "
-              f"tp={tp:.4f} tdr={tdr:.1f} tpot={tpot:.2f} frames={frames}")
+              f"tp={tp:.4f} tdr={tdr:.1f} tpot={tpot:.2f} frames={frames} "
+              f"cpu={getattr(sm, 'cpu', float('nan')):.2f}s")
         span = max(r.toks[-1] for r in sm.reqs) - min(r.arr for r in sm.reqs)
         print(f"    makespan={span:.1f}  edge_busy={sm.edge_busy:.1f} "
               f"({100*sm.edge_busy/span:.1f}%)  cloud_busy={sm.cloud_busy:.1f} "
