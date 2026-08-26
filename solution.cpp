@@ -255,6 +255,9 @@ enum : int {
 #ifndef PUBLIC_TDR_TAIL_LPT
 #define PUBLIC_TDR_TAIL_LPT 256
 #endif
+#ifndef PUBLIC_TDR_BULK_FACTOR
+#define PUBLIC_TDR_BULK_FACTOR 4
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -878,7 +881,8 @@ int main() {
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
         if (publicTdrMode && PUBLIC_TDR_TAIL_LPT > 1 &&
-            (int)BK[B_ARR].size() > PUBLIC_TDR_TAIL_LPT)
+            (int)BK[B_ARR].size() >
+                PUBLIC_TDR_BULK_FACTOR * PUBLIC_TDR_TAIL_LPT)
             publicTdrBulkSeen = true;
 
         // Decode cohort. mDesign is the size the system *wants* to run at; we
