@@ -521,6 +521,18 @@ int main() {
             }
         }
     }
+    // Best reachable norm_tp over the sizes the per-frame scan visits. It only
+    // depends on the static tables, so hoist it out of the frame loop.
+    double NTP_CEIL = 0;
+    if (TPUB > TPBASE) {
+        int hi = min(4096, max(1, M_EFF));
+        for (int m = 1;;) {
+            NTP_CEIL = max(NTP_CEIL,
+                           clamp01(((double)m / roundT(m) - TPBASE) / (TPUB - TPBASE)));
+            if (m >= hi) break;
+            m = min(hi, m + max(1, m / 8));
+        }
+    }
 
     // buckets: 0 arrived, 1 ppost-ready, 2 dpost-ready, 3 fresh, 4 active,
     // 5+c pproc-ready, 5+K+c dproc-ready
@@ -836,76 +848,87 @@ int main() {
         {
             double best = -1, bestSoft = -1e300;
             int mSoft = 1;
-            double ntpCeil = 0;
             int hi = min(4096, max(1, M_EFF));
-            for (int m = 1;;) {
-                double soft = 0;
-                double v = objective(m, exTdr, poolD, 1, nullptr, &soft);
-                if (v >= best - 1e-12) {
-                    best = max(best, v);
-                    mDesign = m;
+            // Cheap upper bound first: ncAt <= 1 - exTdr/DBASE whatever the
+            // scan settles on, so when even that cannot outweigh the reachable
+            // throughput term, tpotBound is false for every cohort size and
+            // the single-cohort scan is pure overhead on a stagger frame.
+            double ncUB = (DBASE > 0) ? max(0.0, 1.0 - exTdr / DBASE) : 1.0;
+            bool tpotPossible = WC > 1e-9 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
+                                !tdrDominated && WC * ncUB >= WTP * NTP_CEIL;
+            if (gAllow == 1 || tpotPossible) {
+                for (int m = 1;;) {
+                    double soft = 0;
+                    double v = objective(m, exTdr, poolD, 1, nullptr, &soft);
+                    if (v >= best - 1e-12) {
+                        best = max(best, v);
+                        mDesign = m;
+                    }
+                    if (soft > bestSoft) {
+                        bestSoft = soft;
+                        mSoft = m;
+                    }
+                    if (m >= hi) break;
+                    m = min(hi, m + max(1, m / 8));
                 }
-                if (soft > bestSoft) {
-                    bestSoft = soft;
-                    mSoft = m;
-                }
-                if (TPUB > TPBASE)
-                    ntpCeil = max(ntpCeil, clamp01(((double)m / roundT(m) - TPBASE) /
-                                                   (TPUB - TPBASE)));
-                if (m >= hi) break;
-                m = min(hi, m + max(1, m / 8));
-            }
-            // Every candidate scores exactly zero: the objective has no
-            // gradient at all here, so the loop above just kept the last size
-            // it looked at -- the largest, which is the worst possible round
-            // time. Fall back to the unclamped score, which still points at
-            // the size that comes closest to scoring.
-            if (best <= 1e-12) mDesign = mSoft;
+                // Every candidate scores exactly zero: the objective has no
+                // gradient at all here, so the loop above just kept the last
+                // size it looked at -- the largest, which is the worst possible
+                // round time. Fall back to the unclamped score, which still
+                // points at the size that comes closest to scoring.
+                if (best <= 1e-12) mDesign = mSoft;
 
-            double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
-            double dAt = sqrt(exTdr * exTdr + exAt * exAt);
-            double ncAt =
-                (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
-            // exAt, not the measured excess: before the first token there are
-            // no gaps to measure, and a test that waits for one can never fire
-            // in time to choose the cohort that would have avoided it. Whether
-            // round time is worth steering is a question about the size we are
-            // about to run, which is what exAt answers. Affordability, by
-            // contrast, is a measured question -- hence estTdr.
-            tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
-                        WC * ncAt >= WTP * ntpCeil && !tdrDominated;
-            if (tpotBound) gAllow = 1;
+                double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
+                double dAt = sqrt(exTdr * exTdr + exAt * exAt);
+                double ncAt = (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE)
+                                          : (dAt <= 1e-12 ? 1.0 : 0.0);
+                // exAt, not the measured excess: before the first token there
+                // are no gaps to measure, and a test that waits for one can
+                // never fire in time to choose the cohort that would have
+                // avoided it. Whether round time is worth steering is a
+                // question about the size we are about to run, which is what
+                // exAt answers. Affordability, by contrast, is a measured
+                // question -- hence estTdr.
+                tpotBound = tpotPossible && exAt > 0.0 && WC * ncAt >= WTP * NTP_CEIL;
+                if (tpotBound) gAllow = 1;
+            }
 
             if (gAllow > 1) {
                 // The staggered plan overrides the single-cohort choice. The
                 // fixed M_FLOOR is a single-cohort notion; under pipelining
                 // the same protection is a floor on the pooled token rate.
+                // One pass evaluates every candidate; the rate floor needs the
+                // best pooled rate first, so buffer the values instead of
+                // paying the objective twice.
                 best = -1;
                 bestSoft = -1e300;
                 mSoft = 1;
+                static vector<int> cM;
+                static vector<double> cR, cV, cS;
+                cM.clear(); cR.clear(); cV.clear(); cS.clear();
                 double bestRate = 0;
-                for (int m = 1;;) {
-                    double r;
-                    objective(m, exTdr, poolD, gAllow, &r);
-                    bestRate = max(bestRate, r);
-                    if (m >= hi) break;
-                    m = min(hi, m + max(1, m / 8));
-                }
                 for (int m = 1;;) {
                     double r, soft = 0;
                     double v = objective(m, exTdr, poolD, gAllow, &r, &soft);
-                    if (r + 1e-12 >= THR_FLOOR * bestRate) {
-                        if (v >= best - 1e-12) {
-                            best = max(best, v);
-                            mDesign = m;
-                        }
-                        if (soft > bestSoft) {
-                            bestSoft = soft;
-                            mSoft = m;
-                        }
-                    }
+                    bestRate = max(bestRate, r);
+                    cM.push_back(m);
+                    cR.push_back(r);
+                    cV.push_back(v);
+                    cS.push_back(soft);
                     if (m >= hi) break;
                     m = min(hi, m + max(1, m / 8));
+                }
+                for (size_t i = 0; i < cM.size(); ++i) {
+                    if (cR[i] + 1e-12 >= THR_FLOOR * bestRate) {
+                        if (cV[i] >= best - 1e-12) {
+                            best = max(best, cV[i]);
+                            mDesign = cM[i];
+                        }
+                        if (cS[i] > bestSoft) {
+                            bestSoft = cS[i];
+                            mSoft = cM[i];
+                        }
+                    }
                 }
                 if (best <= 1e-12) mDesign = mSoft;
             } else {
