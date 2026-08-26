@@ -176,6 +176,12 @@ enum : int {
 #ifndef EFF_PLATEAU
 #define EFF_PLATEAU 0.97
 #endif
+// Shrinking the cohort to protect TPOT also lengthens every queue, which feeds
+// back into TDR and makespan. The model does not capture that coupling, so keep
+// a floor on the fraction of peak token rate the cohort may give up.
+#ifndef THR_FLOOR
+#define THR_FLOOR 0.5
+#endif
 
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
@@ -311,8 +317,16 @@ int main() {
     for (int m = 1; m < MAXM; ++m) roundCache[m] = round_time(m);
 
     // Cohort size past which extra members stop paying for themselves.
-    int M_EFF = 1;
+    int M_EFF = 1, M_FLOOR = 1;
     {
+        double peak = 0;
+        for (int m = 1; m <= 4096; ++m) peak = max(peak, m / roundT(m));
+        for (int m = 1; m <= 4096; ++m) {
+            if (m / roundT(m) >= THR_FLOOR * peak) {
+                M_FLOOR = m;
+                break;
+            }
+        }
         double best = 0;
         for (int m = 1; m <= 2048; ++m) {
             double e = m / roundT(m);
@@ -620,6 +634,7 @@ int main() {
             // dist_base == 0 makes the waiting-time component all-or-nothing:
             // any excess at all forfeits the whole w_c share. When the target is
             // still reachable, protect it rather than trusting the tdr estimate.
+            if (WTP > 1e-9) mDesign = max(mDesign, min(hi, M_FLOOR));
             if (DBASE <= 0 && WC > 1e-9 && roundT(1) * infl <= SLO2) {
                 int cap = 1;
                 for (int m = 1; m <= hi; ++m) {

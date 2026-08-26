@@ -362,6 +362,19 @@ def make_table(kind, rng):
     makes batching the dominant lever; prefill scales with input length."""
     rows = []
     sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    if kind == "flat":
+        # Near-flat decode scaling: batching is almost free, which is what a
+        # task-time table listing sizes up to 4096 implies.
+        rows2 = []
+        for b in sizes:
+            rows2.append((b,
+                          0.05 + 0.02 * b,
+                          0.9 * b * 0.35 + 2.0,
+                          0.04 + 0.01 * b,
+                          0.40 + 0.0008 * b,
+                          2.50 + 0.0040 * b,
+                          0.40 + 0.0008 * b))
+        return rows2
     if kind == "gpu":
         pp, pr, po = 0.05, 0.9, 0.04
         dp, dr, dq = 0.30, 1.8, 0.30
@@ -452,6 +465,10 @@ def build_cases():
     c.append(make_case("edge-lout1", 83, 4, 40, 8, 100.0, 0.70, 0.5, 0.5, lout_hi=1))
     c.append(make_case("edge-tinySLO", 84, 2, 40, 4, 50.0, 0.20, 0.01, 0.01))
     c.append(make_case("edge-1cloud-big", 85, 1, 40, 64, 300.0, 0.60, 0.3, 0.3, lin_hi=4096))
+    # Near-flat decode scaling: huge cohorts should pay off enormously.
+    c.append(make_case("flat-sat-K8", 91, 8, 800, 16, 100.0, 1.00, 0.05, 0.05, kind="flat"))
+    c.append(make_case("flat-sat-K4", 92, 4, 500, 8, 100.0, 0.60, 0.10, 0.10, kind="flat"))
+    c.append(make_case("flat-lat-K8", 93, 8, 400, 16, 800.0, 0.20, 0.20, 0.20, kind="flat"))
     # Long outputs, few requests: decode-dominated.
     c.append(make_case("longout-K4", 61, 4, 60, 8, 200.0, 0.55, 0.20, 0.20, lout_hi=512))
     # Wide inputs: prefill-dominated.
