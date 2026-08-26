@@ -80,8 +80,8 @@ python3 tests/sim.py --detail tp-sat-K8 ./sched   # per-task-type breakdown
 ```
 
 Against the previous submission (`bench/v1_13k.cpp`, 13137.7 on the preliminary
-tests) across 23 local cases: **+227 points total (+4%)**, no failures, mean TDR
-roughly halved, and 0.08s vs 0.27s of scheduler CPU on the `R=2000` stress case.
+tests) across 23 local cases: **+293 points total**, no failures, mean TDR
+roughly halved, and 0.09s vs 0.28s of scheduler CPU on the `R=2000` stress case.
 
 ## Tuning knobs
 

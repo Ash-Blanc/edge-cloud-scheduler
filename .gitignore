@@ -1,3 +1,5 @@
 sched
 *.o
 a.out
+__pycache__/
+*.pyc
