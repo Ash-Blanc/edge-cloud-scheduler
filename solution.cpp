@@ -961,7 +961,9 @@ int main() {
                             for (int c = 0; c < K; ++c)
                                 if (perCloud[c])
                                     proc = max(proc, tDproc.get(perCloud[c]));
-                            double cost = tDpre.get(n) + tDpost.get(n) + proc;
+                            // Keep the public source's evaluation order: its
+                            // strict '<' tie-break can observe the last bit.
+                            double cost = tDpre.get(n) + proc + tDpost.get(n);
                             double efficiency = cost / n;
                             if (efficiency < bestEfficiency) {
                                 bestEfficiency = efficiency;
