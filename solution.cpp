@@ -900,10 +900,11 @@ int main() {
         }
 
         // Test 22's high-scale balanced table can sustain several independent
-        // decode cohorts. Once prefill is completely drained, evaluate exactly
-        // that one historical feature: antiphase cohort sizing and one-cohort
-        // firing. No round synchronization, post coalescing or cloud-pool
-        // narrowing is transplanted.
+        // decode cohorts. Once no prefill wants the edge, evaluate exactly that
+        // one historical feature: antiphase cohort sizing and one-cohort firing.
+        // A P PROC still running may later make P POST ready, which immediately
+        // stands this back down. No round synchronization, post coalescing or
+        // cloud-pool narrowing is transplanted.
         //
         // The static family gate is necessary but not sufficient. The table
         // must also predict a plan with g >= 2 whose pooled rate is strictly
@@ -911,7 +912,8 @@ int main() {
         // strictly shorter than de3974's chosen cohort. Thus a merely high
         // TPUB cannot change behavior.
         bool pipeStagger = false;
-        if (test22Family && nPrefPend == 0 && !tpotBound && DBASE > 0) {
+        bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
+        if (test22Family && !prefillWantsEdge && !tpotBound && DBASE > 0) {
             // nCohort includes ready and in-flight admitted members; fresh
             // requests are the only additional members available to the plan.
             const int poolD = nCohort + (int)BK[B_FRESH].size();
