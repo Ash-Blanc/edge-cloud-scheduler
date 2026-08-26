@@ -219,6 +219,15 @@ enum : int {
 #ifndef TPOT_TDR_ROOM
 #define TPOT_TDR_ROOM 0.5
 #endif
+// dist = hypot(eT, eG), so the marginal value of shaving the TPOT leg scales
+// with eG/dist. Once the TDR leg dwarfs it, no TPOT reduction can move dist,
+// and any throughput spent on one is pure loss -- the shape of judge test 17,
+// where mean_tdr/SLO1 ran to ~1554 while the TPOT leg contributed ~25, and
+// capping the cohort cut mean TPOT five-fold for nothing while tp fell 6%.
+// Below this fraction the TPOT-protective policies stand down.
+#ifndef TPOT_DIST_SHARE
+#define TPOT_DIST_SHARE 0.3
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -707,6 +716,10 @@ int main() {
         }
         double exTdr = max(0.0, (estTdr - SLO1) / SLO1);
         double exTpot = max(0.0, (estTpot - SLO2) / SLO2);
+        // Measured legs of dist. When the TDR leg dominates, policies that
+        // spend throughput to shorten decode rounds are gated off: they cannot
+        // move dist, only the tp term (see TPOT_DIST_SHARE).
+        bool tdrDominated = exTpot < TPOT_DIST_SHARE * exTdr;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
 
@@ -809,7 +822,7 @@ int main() {
             // about to run, which is what exAt answers. Affordability, by
             // contrast, is a measured question -- hence estTdr.
             tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
-                        WC * ncAt >= WTP * ntpCeil;
+                        WC * ncAt >= WTP * ntpCeil && !tdrDominated;
 
             // The throughput floor is here because starving the cohort also
             // lengthens every queue, which feeds back into TDR and makespan --
@@ -894,8 +907,11 @@ int main() {
                 // budget has to be spent against everyone already admitted --
                 // not against nActive, which ignores members whose first token
                 // has not landed yet and so lets a whole burst of admissions
-                // through in the window before it does.
-                int room = mDesign - nCohort;
+                // through in the window before it does. That strict cap is a
+                // TPOT protection bought with throughput, so it only applies
+                // while the TPOT leg of dist is worth buying; where the TDR
+                // leg dominates, over-admission is free score.
+                int room = mDesign - (tdrDominated ? nActive : nCohort);
                 for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0; --i, --room)
                     batch.push_back(BK[B_FRESH][i]);
                 if (!batch.empty()) {
