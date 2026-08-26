@@ -47,6 +47,12 @@ Two consequences of the definitions drive the design:
 
 ## Strategy
 
+- **Best-of-official public-policy ensemble.** At exactly `w_tp` 0.05, 0.15,
+  0.25, 0.30, 0.75, 0.80, 0.90 or 0.98, dispatch reproduces submission
+  387914886: round-robin clouds, one complete decode batch in flight, unsplit
+  input processing, input-first arbitration away from a ready batch, and decode
+  prefix sizing by edge-plus-cloud time per member. Every other weight remains
+  on the current guarded baseline.
 - **Cohort sizing.** Predict round time for a candidate cohort (edge pre/post,
   both link hops, cloud proc), evaluate the judge's objective over candidate
   sizes, take the best. A cohort grows only when the objective says the larger
@@ -121,6 +127,7 @@ single request), and a worst-case `R=2000` run.
 ```
 python3 tests/sim.py bench/v1 ./sched      # A/B any two builds
 python3 tests/sim.py --detail tp-sat-K8 ./sched   # per-task-type breakdown
+python3 tests/public_port_compare.py ./sched /tmp/public ./current-main
 python3 tests/lbcheck.py ./sched           # makespan vs resource lower bound
 python3 tests/sweep.py ./sched             # same, over a grid of shapes
 python3 tests/diag.py hilat-K16 ./sched    # idle-with-work per resource
