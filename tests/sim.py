@@ -399,7 +399,8 @@ def make_table(kind, rng):
 
 
 def make_case(name, seed, K, R, layers, span, wtp, a1, a2, kind="gpu",
-              lat=1.0, bw=10.0, bpt=32768, S=2.0, lin_hi=1024, lout_hi=128):
+              lat=1.0, bw=10.0, bpt=32768, S=2.0, lin_hi=1024, lout_hi=128,
+              lin_lo=16):
     """span is the arrival window in ms; a small span means a saturated backlog,
     which is the regime the judge's hard tests live in."""
     rng = random.Random(seed)
@@ -407,7 +408,8 @@ def make_case(name, seed, K, R, layers, span, wtp, a1, a2, kind="gpu",
     arrivals = []
     for _ in range(R):
         t = rng.uniform(0.0, span)
-        lin = rng.choice([x for x in [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] if x <= lin_hi])
+        lin = rng.choice([x for x in [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+                          if lin_lo <= x <= lin_hi])
         lout = rng.choice([x for x in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] if x <= lout_hi])
         arrivals.append((t, lin, lout))
     arrivals.sort(key=lambda x: x[0])
@@ -461,6 +463,21 @@ def build_cases():
     # Link latency dominates: transfer amortisation is the lever.
     c.append(make_case("hi-lat-K4", 41, 4, 180, 8, 400.0, 0.65, 0.15, 0.15, lat=20.0, bw=2.0))
     c.append(make_case("hi-lat-K8", 42, 8, 220, 16, 300.0, 0.35, 0.15, 0.15, lat=35.0, bw=1.0))
+    # Saturated *and* link-latency bound, with throughput the whole score. A
+    # round costs one link latency per participating cloud whatever it carries,
+    # and a large backlog means the input stage runs dry long before the run
+    # ends, so the cohort has nothing to hide behind. This is the shape whose
+    # metrics no amount of cohort-sizing or edge-ordering tuning can move.
+    c.append(make_case("tp-lat-sat-K16", 43, 16, 700, 32, 100.0, 1.00, 0.05, 0.05,
+                       lat=20.0, bw=1.0, lout_hi=64))
+    c.append(make_case("tp-lat-sat-K4", 44, 4, 700, 32, 100.0, 0.95, 0.05, 0.05,
+                       lat=20.0, bw=1.0, kind="flat", lout_hi=64))
+    # Input stage capacity bound: one cloud, maximal inputs, throughput the whole
+    # score. Mean TDR runs into the millions purely from queueing, and the
+    # makespan equals the unbatchable prefill work, so no schedule can beat it.
+    # Present to prove a change does not mistake this for slack.
+    c.append(make_case("tp-prefill-K1", 45, 1, 500, 32, 200.0, 1.00, 0.05, 0.05,
+                       kind="cpu", lin_lo=4096, lin_hi=4096, lout_hi=64))
     # Large schedule cost: every task pays S, so task count matters most.
     c.append(make_case("bigS-K4", 51, 4, 200, 8, 400.0, 0.60, 0.15, 0.15, S=9.0))
     # Degenerate shapes the statement warns about; these only need to survive.

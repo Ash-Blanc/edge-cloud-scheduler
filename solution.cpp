@@ -202,10 +202,11 @@ enum : int {
 #ifndef FRAG_LAT_SHARE
 #define FRAG_LAT_SHARE 0.5
 #endif
-// Slack kept on the number of clouds used, above the number the input stage can
-// actually keep busy.
+// The cloud pool is sized from a capacity ratio, so it needs the headroom any
+// shared resource needs: a pool loaded to exactly 100% queues without bound.
+// This is the reciprocal of the utilisation it is sized for.
 #ifndef KUSE_MARGIN
-#define KUSE_MARGIN 1.5
+#define KUSE_MARGIN 1.08
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
