@@ -197,6 +197,17 @@ enum : int {
 #ifndef CHUNK_S_FACTOR
 #define CHUNK_S_FACTOR 20.0
 #endif
+// Fraction of a decode round's free window on a cloud that a prefill piece may
+// occupy, in the regime where the waiting-time term is what is being scored.
+#ifndef TPOT_CHUNK_SLACK
+#define TPOT_CHUNK_SLACK 1.0
+#endif
+// Steering round time spends TDR headroom, and the TDR consequence of the trade
+// shows up well after the decision, so require mean TDR to be comfortably
+// inside SLO1 rather than merely inside it.
+#ifndef TPOT_TDR_ROOM
+#define TPOT_TDR_ROOM 0.5
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -430,6 +441,12 @@ int main() {
     bool edgeFree = true;
     vector<char> cloudFree(K, 1);
     vector<int> nPre(K, 0), nDec(K, 0);
+    // Members of a decode round already in flight that still owe this cloud a
+    // D PROC. While that is nonzero the cloud looks idle but is about to be
+    // needed, and any prefill started now lands in a member's gap.
+    vector<int> nDecPend(K, 0);
+    // Cohort members assigned to each cloud, for as long as they are decoding.
+    vector<int> nJoinC(K, 0);
 
     // Lazy heaps give shortest-job-first prefill order without rescanning.
     typedef pair<double, int> PDI;
@@ -644,7 +661,10 @@ int main() {
                 nActive--;
                 sumLastTok -= r.last_tok;
             }
-            if (r.joined) nCohort--;
+            if (r.joined) {
+                nCohort--;
+                if (r.cloud >= 0) nJoinC[r.cloud]--;
+            }
             r.st = ST_FIN;
             bmove(rid, -1);
             if (r.cloud >= 0) nDec[r.cloud]--;
@@ -753,10 +773,28 @@ int main() {
             // back to the unclamped score, which still points at the size that
             // comes closest to scoring.
             if (best <= 1e-12) mDesign = mSoft;
-            // dist_base == 0 makes the waiting-time component all-or-nothing:
-            // any excess at all forfeits the whole w_c share. When the target is
-            // still reachable, protect it rather than trusting the tdr estimate.
-            if (WTP > 1e-9) mDesign = max(mDesign, min(hi, M_FLOOR));
+
+            double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
+            double dAt = sqrt(exTdr * exTdr + exAt * exAt);
+            double ncAt = (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
+            // exAt, not the measured excess: before the first token there are no
+            // gaps to measure, and a test that waits for one can never fire in
+            // time to choose the cohort that would have avoided it. Whether
+            // round time is worth steering is a question about the size we are
+            // about to run, which is what exAt answers. Affordability, by
+            // contrast, is a measured question -- hence estTdr.
+            tpotBound = WC > 1e-9 && exAt > 0.0 && estTdr <= TPOT_TDR_ROOM * SLO1 &&
+                        WC * ncAt >= WTP * ntpCeil;
+
+            // The throughput floor is here because starving the cohort also
+            // lengthens every queue, which feeds back into TDR and makespan --
+            // a coupling round_time does not model. That feedback only threatens
+            // a score when TDR has somewhere bad to go, and the test above
+            // already establishes that it does not: TDR is inside its SLO and
+            // the term being scored is the waiting-time one. Applying the floor
+            // anyway overrides the objective before it can even try the small
+            // cohort, which is the only size that term ever rewards.
+            if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
             if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
                 int cap = 1;
                 for (int m = 1; m <= hi; ++m) {
@@ -765,11 +803,6 @@ int main() {
                 }
                 mDesign = min(mDesign, cap);
             }
-            double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
-            double dAt = sqrt(exTdr * exTdr + exAt * exAt);
-            double ncAt = (DBASE > 0) ? max(0.0, 1.0 - dAt / DBASE) : (dAt <= 1e-12 ? 1.0 : 0.0);
-            tpotBound = WC > 1e-9 && exTpot > 0.0 && exTdr <= 0.0 &&
-                        WC * ncAt >= WTP * ntpCeil;
         }
 
         if (edgeFree) {
@@ -778,8 +811,19 @@ int main() {
             bool havePrefill = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
             int ready = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size();
 
+            // TDR stops at P POST and TPOT only averages gaps *between* tokens,
+            // so the wait from P POST to a request's first token is scored by
+            // nothing. Where the waiting-time term is what pays, that makes it
+            // free to leave the whole cohort idle until prefill has drained,
+            // and it keeps every prefill task -- which would otherwise sit on a
+            // cloud a round needs, or on the edge between D PRE and D POST --
+            // out of every gap that does get measured. Only the *start* of
+            // decoding waits: a cohort already running is never held, since
+            // that would stretch the very gaps this is protecting.
+            bool holdStart = tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct;
+
             bool fire = false;
-            if (haveAct || haveFresh) {
+            if ((haveAct || haveFresh) && !holdStart) {
                 if (!havePrefill) {
                     fire = true;  // nothing else for the edge to do
                 } else if (ready >= mDesign) {
@@ -828,7 +872,9 @@ int main() {
                         if (!R[rid].joined) {
                             R[rid].joined = 1;
                             nCohort++;
+                            if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
                         }
+                        if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                         setSt(rid, ST_DPRE_RUN);
                         bmove(rid, -1);
                     }
@@ -877,7 +923,21 @@ int main() {
             if (best < 0) best = BK[B_ARR].back();
             int c = 0;
             double bl = 1e300;
+            // Prefill cannot be preempted, so a piece running on a cloud that a
+            // decode round needs delays that round by the rest of the piece --
+            // and the piece cannot always be cut small, since a layer is
+            // indivisible. Keeping new prefill off the clouds that are decoding
+            // avoids the collision outright, and costs nothing while the other
+            // clouds have room.
+            bool avoidDec = tpotBound;
+            if (avoidDec) {
+                bool any = false;
+                for (int i = 0; i < K; ++i)
+                    if (!nJoinC[i]) any = true;
+                avoidDec = any;
+            }
             for (int i = 0; i < K; ++i) {
+                if (avoidDec && nJoinC[i]) continue;
                 double load = nPre[i] * (S + tPproc.get(R[best].lin)) +
                               nDec[i] * (S + tDproc.get(max(1, nDec[i])));
                 if (load < bl) {
@@ -914,6 +974,7 @@ int main() {
                 for (int rid : batch) {
                     ac(' ');
                     ai(rid);
+                    if (nDecPend[c] > 0) nDecPend[c]--;
                     setSt(rid, ST_DPROC_RUN);
                     bmove(rid, -1);
                 }
@@ -925,6 +986,11 @@ int main() {
                 continue;
             }
             if (BK[B_PPROC + c].empty()) continue;
+            // This cloud is about to be asked for a D PROC by a round already
+            // in flight. Its D PROC has priority above, but during the uplink
+            // the cloud merely looks idle, and a prefill piece started here
+            // delays the round by its whole duration.
+            if (tpotBound && nDecPend[c] > 0) continue;
             int best = -1;
             while (!qProc[c].empty()) {
                 int rid = qProc[c].top().second;
@@ -952,7 +1018,8 @@ int main() {
                 // is the term this regime is not being scored on.
                 if (tpotBound) {
                     int per = max(1, (mDesign + K - 1) / K);
-                    double slack = roundT(mDesign) - (S + tDproc.get(per));
+                    double slack =
+                        TPOT_CHUNK_SLACK * (roundT(mDesign) - (S + tDproc.get(per)));
                     take = max(1, (int)floor(max(slack, perLayer) / max(perLayer, 1e-9)));
                     take = min(take, remain);
                 }
@@ -1007,7 +1074,9 @@ int main() {
                     if (!R[rid].joined) {
                         R[rid].joined = 1;
                         nCohort++;
+                        if (R[rid].cloud >= 0) nJoinC[R[rid].cloud]++;
                     }
+                    if (R[rid].cloud >= 0) nDecPend[R[rid].cloud]++;
                     setSt(rid, ST_DPRE_RUN);
                     bmove(rid, -1);
                 }

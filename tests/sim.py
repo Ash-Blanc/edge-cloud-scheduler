@@ -489,6 +489,12 @@ def build_cases():
     # Worst-case size: R and total tokens at the stated limits, to check CPU.
     c.append(make_case("stress-R2000", 99, 8, 2000, 64, 200.0, 0.90, 0.10, 0.10,
                        kind="flat", lout_hi=128))
+    # Same size, but weighted so the waiting-time term is what pays. Shrinking
+    # the cohort to protect round time multiplies the number of decode rounds,
+    # and each round costs the interactor a handful of events, so this is the
+    # case that bounds how far that trade may be taken.
+    c.append(make_case("stress-lat-R2000", 98, 8, 2000, 64, 200.0, 0.05, 0.10, 0.10,
+                       kind="flat", lout_hi=128))
     # Near-flat decode scaling: huge cohorts should pay off enormously.
     c.append(make_case("flat-sat-K8", 91, 8, 800, 16, 100.0, 1.00, 0.05, 0.05, kind="flat"))
     c.append(make_case("flat-sat-K4", 92, 4, 500, 8, 100.0, 0.60, 0.10, 0.10, kind="flat"))
