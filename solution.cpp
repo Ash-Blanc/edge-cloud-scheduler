@@ -822,7 +822,17 @@ bool done = false;
 const bool pipeActive = publicPipeDecode && BK[B_ARR].empty() &&
 BK[B_PPOST].empty();
 const int publicWaveCap = pipeActive ? 2 : 1;
+vector<int> postBatch;
 int readyWave = -1;
+if (pipeActive && !BK[B_DPOST].empty()) {
+postBatch = BK[B_DPOST];
+sort(postBatch.begin(), postBatch.end());
+int pending = 0;
+for (const auto& wave : publicWaves) pending += (int)wave.size();
+bool allReady = pending > 0 && (int)postBatch.size() == pending;
+if (!allReady && (int)postBatch.size() * 2 < pending)
+postBatch.clear();
+} else {
 for (int w = 0; w < (int)publicWaves.size(); ++w) {
 bool ok = !publicWaves[w].empty();
 for (int rid : publicWaves[w]) {
@@ -833,16 +843,17 @@ break;
 }
 if (ok) {
 readyWave = w;
+postBatch = publicWaves[w];
 break;
 }
 }
-const bool batchReady = readyWave >= 0;
+}
+const bool batchReady = !postBatch.empty();
 const bool throughputPriority = WTP >= WC;
 auto dispatchPublicPost = [&]() {
-vector<int>& wave = publicWaves[readyWave];
 as("E D POST -1 ");
-ai((long long)wave.size());
-for (int rid : wave) {
+ai((long long)postBatch.size());
+for (int rid : postBatch) {
 ac(' ');
 ai(rid);
 setSt(rid, ST_DPOST_RUN);
@@ -852,7 +863,21 @@ ac('\n');
 edgeFree = false;
 running++;
 nAssigned++;
+if (readyWave >= 0) {
 publicWaves.erase(publicWaves.begin() + readyWave);
+} else {
+vector<char> gone(R.size(), 0);
+for (int rid : postBatch) gone[rid] = 1;
+for (auto& wave : publicWaves) {
+int n = 0;
+for (int rid : wave)
+if (!gone[rid]) wave[n++] = rid;
+wave.resize(n);
+}
+publicWaves.erase(remove_if(publicWaves.begin(), publicWaves.end(),
+[](const vector<int>& w) { return w.empty(); }),
+publicWaves.end());
+}
 done = true;
 };
 if (throughputPriority && batchReady) dispatchPublicPost();
@@ -950,18 +975,6 @@ batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
 sort(batch.begin(), batch.end());
-if (pipeActive && publicWaves.empty() && K >= 2 &&
-(int)batch.size() >= 2) {
-int cut = K / 2;
-vector<int> lo, hi;
-lo.reserve(batch.size());
-hi.reserve(batch.size());
-for (int rid : batch) {
-if (R[rid].cloud < cut) lo.push_back(rid);
-else hi.push_back(rid);
-}
-if (!lo.empty() && !hi.empty()) batch.swap(lo);
-}
 if (!batch.empty()) {
 int best = 1;
 double bestEfficiency = 1e100;
