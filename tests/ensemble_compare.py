@@ -40,14 +40,14 @@ def test17_case():
     """TDR-dominated 0.67-weight backlog with admissions still in flight."""
     case = sim.make_case(
         "official17-tdr",
-        2846,
+        5423,
         2,
         300,
         8,
         1.0,
         0.67,
         0.001,
-        0.1,
+        2.0,
         kind="gpu",
         lat=5.0,
         bw=1.0,
@@ -131,23 +131,41 @@ def main():
     before, before_trace = traced(base, target17)
     after, after_trace = traced(corrected, target17)
     delta("test17-like TDR backlog", before, after, before_trace, after_trace)
+    before_score = sim.score(target17, before)[0]
+    after_score = sim.score(target17, after)[0]
+    print(
+        f"  score {before_score:.6f}->{after_score:.6f} "
+        f"({after_score - before_score:+.6f})"
+    )
     if before_trace == after_trace:
         failures += 1
         print("  ERROR: test-17 arm did not activate")
     if not (after[0] > before[0]):
         failures += 1
         print("  ERROR: test-17 arm did not recover throughput")
+    if not (after_score > before_score):
+        failures += 1
+        print("  ERROR: test-17 arm did not improve score")
 
     target22 = test22_case()
     before, before_trace = traced(base, target22)
     after, after_trace = traced(corrected, target22)
     delta("test22-like pipeline", before, after, before_trace, after_trace)
+    before_score = sim.score(target22, before)[0]
+    after_score = sim.score(target22, after)[0]
+    print(
+        f"  score {before_score:.6f}->{after_score:.6f} "
+        f"({after_score - before_score:+.6f})"
+    )
     if before_trace == after_trace:
         failures += 1
         print("  ERROR: test-22 arm did not activate")
     if not (after[0] > before[0] and after[2] < before[2]):
         failures += 1
         print("  ERROR: test-22 arm did not improve both tp and tpot")
+    if not (after_score > before_score):
+        failures += 1
+        print("  ERROR: test-22 arm did not improve score")
 
     if failures:
         raise SystemExit(f"{failures} ensemble trace assertion(s) failed")
