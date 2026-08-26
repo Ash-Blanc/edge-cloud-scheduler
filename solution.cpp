@@ -1,385 +1,852 @@
+// Edge-Cloud Collaborative Scheduling -- Codeforces 2251A (ICPC 2026 / Huawei).
+//
+// Scoring drives every decision here, so the shape of the objective matters:
+//   score = w_tp * clamp((tp - tp_base)/(tp_UB - tp_base))
+//         + w_c  * (dist_base > 0 ? max(0, 1 - dist/dist_base) : (dist == 0))
+//   dist  = hypot(excess(mean_tdr, SLO1), excess(mean_tpot, SLO2))
+//
+// Two facts follow from the definitions and shape the whole scheduler:
+//
+//   * TDR ends at P POST and TPOT only averages gaps *between* tokens, so the
+//     interval from P POST to a request's first token is scored by nothing.
+//     Holding a not-yet-decoding request costs only makespan, which lets us
+//     assemble large decode cohorts for free.
+//   * Every request in a cohort is served once per decode round, so its TPOT is
+//     the round time. Round time is what we steer: pick the cohort size whose
+//     predicted round maximizes the real objective above.
+//
+// Everything else (SJF prefill, prefill chunking, edge arbitration) follows from
+// pushing on whichever of the two excesses currently dominates dist.
+
 #include <bits/stdc++.h>
+#include <unistd.h>
 using namespace std;
 
-// Interactive scheduler for CF 2251A (Huawei ICPC 2026).
-// Greedy decode-first + full decode batches, with least-loaded cloud pick.
-
-enum State : int {
-    NEW_REQ = 0,
-    P_PRE_RUNNING,
-    WAIT_PRE_UP,
-    P_PROC_READY,
-    P_PROC_RUNNING,
-    WAIT_PRE_DOWN,
-    PRE_DOWN_DONE,
-    P_POST_RUNNING,
-    DECODE_READY,
-    D_PRE_RUNNING,
-    WAIT_DEC_UP,
-    DEC_UP_DONE,
-    D_PROC_RUNNING,
-    WAIT_DEC_DOWN,
-    DEC_DOWN_DONE,
-    D_POST_RUNNING,
-    FINISHED
-};
-
-struct Request {
-    int remote = -1;
-    int lin = 1;
-    int next_ls = 0;
-    int tokens = 0;
-    double arr_time = 0.0;
-    double last_tok = 0.0;
-    State st = State::NEW_REQ;
-};
-
-struct Col {
-    vector<pair<int, double>> p;
-    void add(int sz, double t) {
-        if (t >= 0) p.push_back({sz, t});
+// ---------------------------------------------------------------- fast io
+// read()/write() directly: fread would block until the buffer fills, which
+// deadlocks against an interactor waiting on our response.
+namespace io {
+static char ib[1 << 16];
+static int ip = 0, il = 0;
+static inline int gc() {
+    if (ip == il) {
+        il = (int)::read(0, ib, sizeof(ib));
+        ip = 0;
+        if (il <= 0) return -1;
     }
-    void freeze() {
-        sort(p.begin(), p.end());
-        p.erase(unique(p.begin(), p.end(),
-                       [](auto& a, auto& b) { return a.first == b.first; }),
-                p.end());
+    return (unsigned char)ib[ip++];
+}
+static char tok[64];
+static inline int rtok() {
+    int c = gc();
+    while (c == ' ' || c == '\n' || c == '\r' || c == '\t') c = gc();
+    if (c < 0) return 0;
+    int n = 0;
+    while (c > ' ') {
+        if (n < 63) tok[n++] = (char)c;
+        c = gc();
     }
-    double get(int m) const {
-        if (p.empty()) return 1.0;
-        if (m <= p.front().first) return p.front().second;
-        if (m >= p.back().first) return p.back().second;
-        int lo = 0, hi = (int)p.size() - 1;
+    tok[n] = 0;
+    return n;
+}
+static inline bool rint(long long& v) {
+    if (!rtok()) return false;
+    v = strtoll(tok, nullptr, 10);
+    return true;
+}
+static inline bool rdbl(double& v) {
+    if (!rtok()) return false;
+    v = strtod(tok, nullptr);
+    return true;
+}
+static char ob[1 << 16];
+static int op = 0;
+static inline void oflush() {
+    if (op) {
+        ssize_t r = ::write(1, ob, op);
+        (void)r;
+        op = 0;
+    }
+}
+static inline void oc(char c) {
+    if (op == (int)sizeof(ob)) oflush();
+    ob[op++] = c;
+}
+static inline void os(const char* s) {
+    while (*s) oc(*s++);
+}
+static inline void osn(const char* p, size_t n) {
+    for (size_t i = 0; i < n; ++i) oc(p[i]);
+}
+static inline void oi(long long v) {
+    char t[24];
+    int n = 0;
+    if (v < 0) {
+        oc('-');
+        v = -v;
+    }
+    do {
+        t[n++] = (char)('0' + (int)(v % 10));
+        v /= 10;
+    } while (v);
+    while (n) oc(t[--n]);
+}
+}  // namespace io
+
+// Assignments are buffered because the response must lead with its count.
+static string ANS;
+static inline void as(const char* s) { ANS += s; }
+static inline void ai(long long v) {
+    char t[24];
+    int n = 0;
+    if (v < 0) {
+        ANS += '-';
+        v = -v;
+    }
+    do {
+        t[n++] = (char)('0' + (int)(v % 10));
+        v /= 10;
+    } while (v);
+    while (n) ANS += t[--n];
+}
+static inline void ac(char c) { ANS += c; }
+
+// Piecewise-linear task-time column, clamped outside the listed sizes.
+struct Tab {
+    vector<int> xs;
+    vector<double> ys;
+    void add(int x, double y) {
+        if (y >= 0) {
+            xs.push_back(x);
+            ys.push_back(y);
+        }
+    }
+    void build() {
+        vector<int> id(xs.size());
+        iota(id.begin(), id.end(), 0);
+        sort(id.begin(), id.end(), [&](int a, int b) { return xs[a] < xs[b]; });
+        vector<int> nx;
+        vector<double> ny;
+        for (int i : id) {
+            if (!nx.empty() && nx.back() == xs[i]) continue;
+            nx.push_back(xs[i]);
+            ny.push_back(ys[i]);
+        }
+        xs.swap(nx);
+        ys.swap(ny);
+    }
+    double get(double m) const {
+        if (xs.empty()) return 1.0;
+        if (m <= xs.front()) return ys.front();
+        if (m >= xs.back()) return ys.back();
+        int lo = 0, hi = (int)xs.size() - 1;
         while (hi - lo > 1) {
             int mid = (lo + hi) >> 1;
-            if (p[mid].first <= m) lo = mid;
+            if (xs[mid] <= m) lo = mid;
             else hi = mid;
         }
-        int s0 = p[lo].first, s1 = p[hi].first;
-        double t0 = p[lo].second, t1 = p[hi].second;
-        if (s1 == s0) return t0;
-        return t0 + (t1 - t0) * (double)(m - s0) / (double)(s1 - s0);
+        double x0 = xs[lo], x1 = xs[hi];
+        if (x1 == x0) return ys[lo];
+        return ys[lo] + (ys[hi] - ys[lo]) * (m - x0) / (x1 - x0);
     }
 };
 
-static vector<string> split_ws(const string& s) {
-    vector<string> out;
-    string x;
-    stringstream ss(s);
-    while (ss >> x) out.push_back(x);
-    return out;
+enum : int {
+    ST_ARR = 0,
+    ST_PPRE_RUN,
+    ST_PPROC_READY,
+    ST_PPROC_RUN,
+    ST_PDOWN_WAIT,
+    ST_PPOST_READY,
+    ST_PPOST_RUN,
+    ST_DIDLE,
+    ST_DPRE_RUN,
+    ST_DUP_WAIT,
+    ST_DPROC_READY,
+    ST_DPROC_RUN,
+    ST_DDOWN_WAIT,
+    ST_DPOST_READY,
+    ST_DPOST_RUN,
+    ST_FIN
+};
+
+static int K, LAYERS;
+static double S, LAT, BW, BPT;
+static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
+static Tab tPpre, tPproc, tPpost, tDpre, tDproc, tDpost;
+
+static inline double xfer(double len) { return LAT + 8.0 * len * BPT / (BW * 1e6); }
+
+// One decode round for a cohort of m: edge pre/post, both link hops, cloud proc.
+// This is the value a member's TPOT converges to, so it is also what we tune.
+static double round_time(int m) {
+    if (m < 1) m = 1;
+    int k = min(K, m);
+    double per = ceil((double)m / k);
+    double edge = 2.0 * S + tDpre.get(m) + tDpost.get(m);
+    double link = 2.0 * (k * LAT + 8.0 * (double)m * BPT / (BW * 1e6));
+    double proc = S + tDproc.get(per);
+    return edge + link + proc;
+}
+
+static vector<double> roundCache;
+static inline double roundT(int m) {
+    if (m >= 1 && m < (int)roundCache.size()) return roundCache[m];
+    return round_time(m);
+}
+
+static inline double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+
+// The judge's own formula, evaluated on the cohort we are considering.
+static double objective(int m, double ex_tdr, double infl) {
+    double rt = roundT(m);
+    double ntp = 0.0;
+    if (TPUB > TPBASE) ntp = clamp01(((double)m / rt - TPBASE) / (TPUB - TPBASE));
+    double ex_tpot = max(0.0, (rt * infl - SLO2) / SLO2);
+    double dist = sqrt(ex_tdr * ex_tdr + ex_tpot * ex_tpot);
+    double nc;
+    if (DBASE > 0) nc = max(0.0, 1.0 - dist / DBASE);
+    else nc = (dist <= 1e-12) ? 1.0 : 0.0;
+    return WTP * ntp + WC * nc;
+}
+
+struct Req {
+    int lin = 1;
+    int cloud = -1;
+    int next_ls = 0;
+    int tokens = 0;
+    double arr = 0;
+    double last_tok = 0;
+    int st = ST_ARR;
+};
+
+static vector<Req> R;
+static vector<int> bid, bpos;
+static vector<vector<int>> BK;
+
+static inline void ensureReq(int rid) {
+    if ((int)R.size() <= rid) {
+        R.resize(rid + 1);
+        bid.resize(rid + 1, -1);
+        bpos.resize(rid + 1, -1);
+    }
+}
+
+static inline void bmove(int rid, int nb) {
+    int ob = bid[rid];
+    if (ob == nb) return;
+    if (ob >= 0) {
+        vector<int>& v = BK[ob];
+        int p = bpos[rid];
+        v[p] = v.back();
+        bpos[v[p]] = p;
+        v.pop_back();
+    }
+    bid[rid] = nb;
+    if (nb >= 0) {
+        bpos[rid] = (int)BK[nb].size();
+        BK[nb].push_back(rid);
+    }
 }
 
 int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
+    long long k_ = 1, bpt_ = 1, nl_ = 1, n_ = 0;
+    double s_ = 1, lat_ = 1, bw_ = 1;
+    if (!io::rint(k_)) return 0;
+    io::rdbl(s_);
+    io::rdbl(lat_);
+    io::rdbl(bw_);
+    io::rint(bpt_);
+    io::rint(nl_);
+    K = (int)k_;
+    S = s_;
+    LAT = lat_;
+    BW = bw_;
+    BPT = (double)bpt_;
+    LAYERS = (int)nl_;
 
-    int K, bytesPerToken, numLayers;
-    double S, latency, bandwidth;
-    if (!(cin >> K >> S >> latency >> bandwidth >> bytesPerToken >> numLayers)) return 0;
+    io::rdbl(SLO1);
+    io::rdbl(SLO2);
+    io::rdbl(TPUB);
+    io::rdbl(TPBASE);
+    io::rdbl(DBASE);
+    io::rdbl(WTP);
+    io::rdbl(WC);
 
-    double SLO1, SLO2, tpUB, tpBase, distBase, wtp, wc;
-    cin >> SLO1 >> SLO2 >> tpUB >> tpBase >> distBase >> wtp >> wc;
-
-    Col ppre, pproc, ppost, dpre, dproc, dpost;
-    int Ntbl;
-    cin >> Ntbl;
-    for (int i = 0; i < Ntbl; ++i) {
-        int bsz;
-        double a, b, c, d, e, f;
-        cin >> bsz >> a >> b >> c >> d >> e >> f;
-        ppre.add(bsz, a);
-        pproc.add(bsz, b);
-        ppost.add(bsz, c);
-        dpre.add(bsz, d);
-        dproc.add(bsz, e);
-        dpost.add(bsz, f);
+    io::rint(n_);
+    for (long long i = 0; i < n_; ++i) {
+        long long b = 1;
+        double a = -1, c = -1, d = -1, e = -1, f = -1, g = -1;
+        io::rint(b);
+        io::rdbl(a);
+        io::rdbl(c);
+        io::rdbl(d);
+        io::rdbl(e);
+        io::rdbl(f);
+        io::rdbl(g);
+        int bs = (int)b;
+        tPpre.add(bs, a);
+        tPproc.add(bs, c);
+        tPpost.add(bs, d);
+        tDpre.add(bs, e);
+        tDproc.add(bs, f);
+        tDpost.add(bs, g);
     }
-    ppre.freeze();
-    pproc.freeze();
-    ppost.freeze();
-    dpre.freeze();
-    dproc.freeze();
-    dpost.freeze();
+    tPpre.build();
+    tPproc.build();
+    tPpost.build();
+    tDpre.build();
+    tDproc.build();
+    tDpost.build();
 
-    vector<Request> req;
-    req.reserve(2048);
-    vector<int> live;
-    live.reserve(2048);
+    const int MAXM = 4097;
+    roundCache.resize(MAXM);
+    for (int m = 1; m < MAXM; ++m) roundCache[m] = round_time(m);
+
+    // Cohort size past which extra members stop paying for themselves.
+    int M_EFF = 1;
+    {
+        double best = 0;
+        for (int m = 1; m <= 2048; ++m) {
+            double e = m / roundT(m);
+            if (e > best) {
+                best = e;
+                M_EFF = m;
+            }
+        }
+        for (int m = 1; m <= M_EFF; ++m) {
+            if (m / roundT(m) >= 0.97 * best) {
+                M_EFF = m;
+                break;
+            }
+        }
+    }
+
+    // buckets: 0 arrived, 1 ppost-ready, 2 dpost-ready, 3 fresh, 4 active,
+    // 5+c pproc-ready, 5+K+c dproc-ready
+    const int B_ARR = 0, B_PPOST = 1, B_DPOST = 2, B_FRESH = 3, B_ACT = 4, B_PPROC = 5;
+    const int B_DPROC = 5 + K;
+    BK.assign(5 + 2 * K, {});
+
+    R.reserve(2048);
+    bid.reserve(2048);
+    bpos.reserve(2048);
+
     bool edgeFree = true;
     vector<char> cloudFree(K, 1);
-    vector<int> n_pre(K, 0), n_dec(K, 0);
-    vector<double> lin_pre(K, 0.0);
-    double avg_lout = 16.0;
-    int fin_cnt = 0;
-    double sum_lout = 0.0;
+    vector<int> nPre(K, 0), nDec(K, 0);
 
-    auto ensure = [&](int rid) {
-        if ((int)req.size() <= rid) req.resize(rid + 1);
-    };
+    // Lazy heaps give shortest-job-first prefill order without rescanning.
+    typedef pair<double, int> PDI;
+    priority_queue<PDI, vector<PDI>, greater<PDI>> qArr;
+    vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 
-    auto go = [&](int rid, State ns) {
-        State os = req[rid].st;
-        int c = req[rid].remote;
-        auto in_pre = [&](State s) {
-            return s == State::NEW_REQ || s == State::P_PRE_RUNNING || s == State::WAIT_PRE_UP ||
-                   s == State::P_PROC_READY || s == State::P_PROC_RUNNING ||
-                   s == State::WAIT_PRE_DOWN || s == State::PRE_DOWN_DONE ||
-                   s == State::P_POST_RUNNING;
-        };
-        if (c >= 0 && c < K) {
-            if (in_pre(os) && !in_pre(ns)) {
-                n_pre[c]--;
-                lin_pre[c] -= req[rid].lin;
-                n_dec[c]++;
+    long long running = 0, xfers = 0;
+    int nLive = 0, nActive = 0, nPrefPend = 0;
+    double sumLastTok = 0, sumArrPend = 0;
+    double sumTdr = 0;
+    long long nTdr = 0;
+    double sumGap = 0;
+    long long nGap = 0;
+
+    vector<int> finBuf, ridBuf, batch;
+
+    auto setSt = [&](int rid, int st) { R[rid].st = st; };
+
+    for (;;) {
+        if (!io::rtok()) {
+            io::oflush();
+            return 0;
+        }
+        if (io::tok[0] == 'E' && io::tok[1] == 'N') {
+            io::oflush();
+            return 0;
+        }
+        double now = strtod(io::tok, nullptr);
+        long long ecnt;
+        if (!io::rint(ecnt)) {
+            io::oflush();
+            return 0;
+        }
+
+        finBuf.clear();
+        for (long long ev = 0; ev < ecnt; ++ev) {
+            if (!io::rtok()) {
+                io::oflush();
+                return 0;
             }
-            if (os != State::FINISHED && ns == State::FINISHED && !in_pre(os)) n_dec[c]--;
-        }
-        req[rid].st = ns;
-    };
+            char e0 = io::tok[0], e1 = io::tok[1];
+            if (e0 == 'A') {  // ARR rid lin
+                long long rid = 0, lin = 0;
+                io::rint(rid);
+                io::rint(lin);
+                ensureReq((int)rid);
+                Req& r = R[rid];
+                r.lin = (int)lin;
+                r.arr = now;
+                r.last_tok = now;
+                r.next_ls = 0;
+                r.tokens = 0;
+                r.cloud = -1;
+                r.st = ST_ARR;
+                bid[rid] = -1;
+                bmove((int)rid, B_ARR);
+                nLive++;
+                nPrefPend++;
+                sumArrPend += now;
+                double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
+                qArr.push(PDI(w, (int)rid));
+            } else if (e0 == 'F') {  // FIN rid
+                long long rid = 0;
+                io::rint(rid);
+                finBuf.push_back((int)rid);
+            } else if (e0 == 'T') {  // TDN <server> <phase> <type> ... <dur>
+                io::rtok();
+                bool isEdge = (io::tok[0] == 'E');
+                int cl = isEdge ? -1 : atoi(io::tok + 1);
+                io::rtok();
+                char ph = io::tok[0];
+                io::rtok();
+                char ty = io::tok[0];        // P / R / O  (PRE / PROC / POST)
+                bool isPre = (io::tok[1] == 'R' && io::tok[2] == 'E');
+                bool isProc = (io::tok[1] == 'R' && io::tok[2] == 'O');
+                (void)ty;
+                running--;
+                if (isEdge) edgeFree = true;
+                else if (cl >= 0 && cl < K) cloudFree[cl] = 1;
 
-    auto tdr_urg = [&](int i, double now) -> double {
-        return (now - req[i].arr_time) / SLO1;
-    };
-
-    auto cloud_load = [&](int c) -> double {
-        double avg_lin = n_pre[c] ? lin_pre[c] / n_pre[c] : 1.0;
-        double pre = n_pre[c] * (S + pproc.get(max(1, (int)(avg_lin + 0.5))));
-        double dec = n_dec[c] * (S + dproc.get(max(1, n_dec[c]))) *
-                     (0.20 + 0.50 * wc) * max(0.5, avg_lout * 0.08);
-        return pre + dec + (cloudFree[c] ? 0.0 : 0.05 * S);
-    };
-
-    int rr = 0;
-    auto pick_cloud = [&]() -> int {
-        int best = rr;
-        double bl = cloud_load(rr);
-        for (int i = 1; i < K; ++i) {
-            int c = (rr + i) % K;
-            double L = cloud_load(c);
-            if (L + 1e-12 < bl) {
-                bl = L;
-                best = c;
+                double dur = 0;
+                if (ph == 'P') {
+                    long long a = 0, b = 0, c = 0, d = 0;
+                    if (isProc) {
+                        io::rint(a);
+                        io::rint(b);
+                        io::rint(c);
+                        io::rint(d);
+                        io::rdbl(dur);
+                        int rid = (int)d;
+                        Req& r = R[rid];
+                        if (r.next_ls >= LAYERS) {
+                            setSt(rid, ST_PDOWN_WAIT);
+                            xfers++;  // last piece queues the input-stage DOWN
+                        } else {
+                            setSt(rid, ST_PPROC_READY);
+                            bmove(rid, B_PPROC + r.cloud);
+                            qProc[r.cloud].push(PDI(tPproc.get(r.lin) *
+                                                        (double)(LAYERS - r.next_ls) / LAYERS,
+                                                    rid));
+                        }
+                    } else {
+                        io::rint(a);
+                        io::rint(b);
+                        io::rdbl(dur);
+                        int rid = (int)b;
+                        if (isPre) {
+                            setSt(rid, ST_PPROC_READY);  // waits on the UP XDN
+                            xfers++;
+                        } else {  // P POST: this is where TDR stops
+                            Req& r = R[rid];
+                            setSt(rid, ST_DIDLE);
+                            bmove(rid, B_FRESH);
+                            sumTdr += now - r.arr;
+                            nTdr++;
+                            nPrefPend--;
+                            sumArrPend -= r.arr;
+                            r.last_tok = now;
+                        }
+                    }
+                } else {
+                    long long a = 0, m = 0;
+                    io::rint(a);
+                    io::rint(m);
+                    ridBuf.clear();
+                    for (long long j = 0; j < m; ++j) {
+                        long long x = 0;
+                        io::rint(x);
+                        ridBuf.push_back((int)x);
+                    }
+                    io::rdbl(dur);
+                    if (isPre) {  // D PRE -> one UP per distinct cloud
+                        static vector<char> seen;
+                        seen.assign(K, 0);
+                        for (int rid : ridBuf) {
+                            setSt(rid, ST_DUP_WAIT);
+                            if (R[rid].cloud >= 0) seen[R[rid].cloud] = 1;
+                        }
+                        for (int c = 0; c < K; ++c)
+                            if (seen[c]) xfers++;
+                    } else if (isProc) {
+                        for (int rid : ridBuf) setSt(rid, ST_DDOWN_WAIT);
+                        xfers++;
+                    } else {  // D POST: one token per member
+                        for (int rid : ridBuf) {
+                            Req& r = R[rid];
+                            if (r.tokens >= 1) {
+                                sumGap += now - r.last_tok;
+                                nGap++;
+                                sumLastTok -= r.last_tok;
+                            } else {
+                                nActive++;  // gap clock starts at the first token
+                            }
+                            r.tokens++;
+                            r.last_tok = now;
+                            sumLastTok += now;
+                            setSt(rid, ST_DIDLE);
+                            bmove(rid, B_ACT);
+                        }
+                    }
+                }
+            } else if (e0 == 'X') {  // XDN <dir> <remote> <size> <kind> <m> <rid...>
+                io::rtok();
+                bool up = (io::tok[0] == 'U');
+                long long rem = 0, sz = 0, m = 0;
+                io::rint(rem);
+                io::rint(sz);
+                io::rtok();
+                bool kindPre = (io::tok[0] == 'P');
+                io::rint(m);
+                xfers--;
+                for (long long j = 0; j < m; ++j) {
+                    long long x = 0;
+                    io::rint(x);
+                    int rid = (int)x;
+                    Req& r = R[rid];
+                    if (kindPre) {
+                        if (up) {
+                            setSt(rid, ST_PPROC_READY);
+                            bmove(rid, B_PPROC + r.cloud);
+                            qProc[r.cloud].push(
+                                PDI(tPproc.get(r.lin) * (double)(LAYERS - r.next_ls) / LAYERS, rid));
+                        } else {
+                            setSt(rid, ST_PPOST_READY);
+                            bmove(rid, B_PPOST);
+                        }
+                    } else {
+                        if (up) {
+                            setSt(rid, ST_DPROC_READY);
+                            bmove(rid, B_DPROC + r.cloud);
+                        } else {
+                            setSt(rid, ST_DPOST_READY);
+                            bmove(rid, B_DPOST);
+                        }
+                    }
+                }
+                (void)e1;
+                (void)rem;
+                (void)sz;
             }
         }
-        rr = (best + 1) % K;
-        return best;
-    };
-
-    auto on_tdn = [&](const vector<string>& tok, double now) {
-        string server = tok[1];
-        string phase = tok[2];
-        string type = tok[3];
-        if (server == "E") edgeFree = true;
-        else {
-            int c = stoi(server.substr(1));
-            if (0 <= c && c < K) cloudFree[c] = 1;
-        }
-        if (phase == "P") {
-            int rid = -1;
-            if (type == "PRE" || type == "POST") rid = stoi(tok[5]);
-            else if (type == "PROC") rid = stoi(tok[7]);
-            if (rid < 0) return;
-            ensure(rid);
-            if (type == "PRE") go(rid, State::WAIT_PRE_UP);
-            else if (type == "PROC") {
-                if (req[rid].next_ls >= numLayers) go(rid, State::WAIT_PRE_DOWN);
-                else go(rid, State::P_PROC_READY);
-            } else if (type == "POST") {
-                req[rid].last_tok = now;
-                go(rid, State::DECODE_READY);
+        for (int rid : finBuf) {
+            Req& r = R[rid];
+            if (r.st == ST_FIN) continue;
+            if (r.tokens >= 1) {
+                nActive--;
+                sumLastTok -= r.last_tok;
             }
-            return;
+            r.st = ST_FIN;
+            bmove(rid, -1);
+            if (r.cloud >= 0) nDec[r.cloud]--;
+            nLive--;
         }
-        int m = stoi(tok[5]);
-        for (int j = 0; j < m; ++j) {
-            int rid = stoi(tok[6 + j]);
-            ensure(rid);
-            if (type == "PRE") go(rid, State::WAIT_DEC_UP);
-            else if (type == "PROC") go(rid, State::WAIT_DEC_DOWN);
-            else if (type == "POST") {
-                req[rid].tokens++;
-                req[rid].last_tok = now;
-                go(rid, State::DECODE_READY);
+
+        // Estimated means, including work still in flight, so the two excesses
+        // can be compared while there is still time to act on them.
+        double estTdr, estTpot;
+        {
+            double pend = (double)nPrefPend * now - sumArrPend;
+            estTdr = (sumTdr + max(0.0, pend)) / max(1.0, (double)(nTdr + nPrefPend));
+            double open = (double)nActive * now - sumLastTok;
+            estTpot = (sumGap + max(0.0, open)) / max(1.0, (double)(nGap + nActive));
+        }
+        double exTdr = max(0.0, (estTdr - SLO1) / SLO1);
+        double exTpot = max(0.0, (estTpot - SLO2) / SLO2);
+        double meanOpenGap =
+            nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
+
+        int nAssigned = 0;
+        ANS.clear();
+
+        // ---- edge ----
+        bool edgeBusyNow = !edgeFree;
+        if (edgeFree && !BK[B_DPOST].empty()) {
+            batch = BK[B_DPOST];
+            sort(batch.begin(), batch.end());
+            as("E D POST -1 ");
+            ai((long long)batch.size());
+            for (int rid : batch) {
+                ac(' ');
+                ai(rid);
+                setSt(rid, ST_DPOST_RUN);
+                bmove(rid, -1);
             }
-        }
-    };
-
-    auto on_xdn = [&](const vector<string>& tok) {
-        string dir = tok[1];
-        string type = tok[4];
-        int m = stoi(tok[5]);
-        for (int j = 0; j < m; ++j) {
-            int rid = stoi(tok[6 + j]);
-            ensure(rid);
-            if (type == "PRE") {
-                if (dir == "UP") go(rid, State::P_PROC_READY);
-                else go(rid, State::PRE_DOWN_DONE);
-            } else {
-                if (dir == "UP") go(rid, State::DEC_UP_DONE);
-                else go(rid, State::DEC_DOWN_DONE);
-            }
-        }
-    };
-
-    while (true) {
-        string first;
-        if (!(cin >> first)) return 0;
-        if (first == "END") return 0;
-        double now = stod(first);
-        int eventCount;
-        cin >> eventCount;
-        string dummy;
-        getline(cin, dummy);
-
-        for (int ev = 0; ev < eventCount; ++ev) {
-            string line;
-            getline(cin, line);
-            auto tok = split_ws(line);
-            if (tok.empty()) continue;
-            if (tok[0] == "ARR") {
-                int rid = stoi(tok[1]);
-                int lin = stoi(tok[2]);
-                ensure(rid);
-                req[rid].lin = lin;
-                req[rid].arr_time = now;
-                req[rid].last_tok = now;
-                req[rid].next_ls = 0;
-                req[rid].tokens = 0;
-                req[rid].remote = -1;
-                req[rid].st = State::NEW_REQ;
-                live.push_back(rid);
-            } else if (tok[0] == "TDN") {
-                on_tdn(tok, now);
-            } else if (tok[0] == "XDN") {
-                on_xdn(tok);
-            } else if (tok[0] == "FIN") {
-                int rid = stoi(tok[1]);
-                ensure(rid);
-                sum_lout += req[rid].tokens;
-                fin_cnt++;
-                avg_lout = sum_lout / max(1, fin_cnt);
-                go(rid, State::FINISHED);
-            }
-        }
-
-        vector<string> ans;
-
-        vector<int> v_dpost, v_dpre, v_ppost, v_ppre;
-        v_dpost.reserve(64);
-        v_dpre.reserve(64);
-        v_ppost.reserve(16);
-        v_ppre.reserve(16);
-        vector<vector<int>> v_dproc(K), v_pproc(K);
-        size_t wlive = 0;
-        for (size_t k = 0; k < live.size(); ++k) {
-            int i = live[k];
-            if (req[i].st == State::FINISHED) continue;
-            live[wlive++] = i;
-            switch (req[i].st) {
-                case State::DEC_DOWN_DONE: v_dpost.push_back(i); break;
-                case State::DECODE_READY: v_dpre.push_back(i); break;
-                case State::PRE_DOWN_DONE: v_ppost.push_back(i); break;
-                case State::NEW_REQ: v_ppre.push_back(i); break;
-                case State::DEC_UP_DONE:
-                    if (req[i].remote >= 0) v_dproc[req[i].remote].push_back(i);
-                    break;
-                case State::P_PROC_READY:
-                    if (req[i].remote >= 0) v_pproc[req[i].remote].push_back(i);
-                    break;
-                default: break;
-            }
-        }
-        live.resize(wlive);
-
-        int best_ppost = -1;
-        double best_ppost_u = -1.0;
-        for (int rid : v_ppost) {
-            double u = tdr_urg(rid, now);
-            if (u > best_ppost_u) {
-                best_ppost_u = u;
-                best_ppost = rid;
-            }
-        }
-
-        if (edgeFree && !v_dpost.empty()) {
-            for (int rid : v_dpost) go(rid, State::D_POST_RUNNING);
-            string cmd = "E D POST -1 " + to_string(v_dpost.size());
-            for (int rid : v_dpost) cmd += " " + to_string(rid);
-            ans.push_back(cmd);
+            ac('\n');
             edgeFree = false;
+            running++;
+            nAssigned++;
         }
 
-        if (edgeFree && best_ppost != -1) {
-            edgeFree = false;
-            go(best_ppost, State::P_POST_RUNNING);
-            ans.push_back("E P POST " + to_string(req[best_ppost].remote) + " " +
-                          to_string(best_ppost));
+        // Decode cohort. mDesign is the size the system *wants* to run at; we
+        // let requests accumulate towards it and spend the wait on prefill,
+        // which is productive work rather than an idle edge.
+        // The model assumes a request's gap equals one clean round. Reality adds
+        // interleaved prefill and pipeline stalls, so calibrate against measured
+        // gaps -- without this the optimiser chases a round time it cannot reach
+        // and shrinks the cohort to nothing.
+        double infl = 1.0;
+        if (nGap >= 8 && nActive > 0) {
+            double model = roundT(max(1, nActive));
+            if (model > 1e-9) infl = min(20.0, max(1.0, (sumGap / (double)nGap) / model));
+        }
+        int mDesign = 1;
+        {
+            double best = -1;
+            int hi = min(4096, max(1, M_EFF));
+            for (int m = 1;;) {
+                double v = objective(m, exTdr, infl);
+                if (v >= best - 1e-12) {
+                    best = max(best, v);
+                    mDesign = m;
+                }
+                if (m >= hi) break;
+                m = min(hi, m + max(1, m / 8));
+            }
+            // dist_base == 0 makes the waiting-time component all-or-nothing:
+            // any excess at all forfeits the whole w_c share. When the target is
+            // still reachable, protect it rather than trusting the tdr estimate.
+            if (DBASE <= 0 && WC > 1e-9 && roundT(1) * infl <= SLO2) {
+                int cap = 1;
+                for (int m = 1; m <= hi; ++m) {
+                    if (roundT(m) * infl <= SLO2) cap = m;
+                    else break;
+                }
+                mDesign = min(mDesign, cap);
+            }
         }
 
-        if (edgeFree && !v_dpre.empty()) {
-            for (int rid : v_dpre) go(rid, State::D_PRE_RUNNING);
-            string cmd = "E D PRE -1 " + to_string(v_dpre.size());
-            for (int rid : v_dpre) cmd += " " + to_string(rid);
-            ans.push_back(cmd);
-            edgeFree = false;
+        if (edgeFree) {
+            bool haveAct = !BK[B_ACT].empty();
+            bool haveFresh = !BK[B_FRESH].empty();
+            bool havePrefill = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
+            int ready = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size();
+
+            bool fire = false;
+            if (haveAct || haveFresh) {
+                if (!havePrefill) {
+                    fire = true;  // nothing else for the edge to do
+                } else if (ready >= mDesign) {
+                    fire = true;  // cohort is as large as it is worth waiting for
+                } else if (haveAct && WC > 1e-9) {
+                    // Serving gaps early is only worth it if the batch is not so
+                    // small that its per-token edge cost starves everything else.
+                    double ptcNow =
+                        (2.0 * S + tDpre.get(ready) + tDpost.get(ready)) / max(1, ready);
+                    double ptcBest =
+                        (2.0 * S + tDpre.get(mDesign) + tDpost.get(mDesign)) / max(1, mDesign);
+                    bool efficient = ptcNow <= 1.6 * ptcBest;
+                    double pred = meanOpenGap + roundT(max(1, nActive));
+                    if (efficient && pred >= SLO2 * 0.85) {
+                        if (pred <= SLO2 * 2.0) fire = true;
+                        else {
+                            double dT = max(1.0, (double)(nTdr + nPrefPend));
+                            double dG = max(1.0, (double)(nGap + nActive));
+                            double rP = nPrefPend * exTdr / (SLO1 * dT);
+                            double rD = nActive * exTpot / (SLO2 * dG);
+                            fire = (rD >= rP);
+                        }
+                    }
+                    if (meanOpenGap > 8.0 * SLO2) fire = true;  // starvation escape
+                }
+            }
+
+            if (fire) {
+                batch.clear();
+                for (int rid : BK[B_ACT]) batch.push_back(rid);
+                int room = mDesign - nActive;
+                for (int i = (int)BK[B_FRESH].size() - 1; i >= 0 && room > 0; --i, --room)
+                    batch.push_back(BK[B_FRESH][i]);
+                if (!batch.empty()) {
+                    sort(batch.begin(), batch.end());
+                    as("E D PRE -1 ");
+                    ai((long long)batch.size());
+                    for (int rid : batch) {
+                        ac(' ');
+                        ai(rid);
+                        setSt(rid, ST_DPRE_RUN);
+                        bmove(rid, -1);
+                    }
+                    ac('\n');
+                    edgeFree = false;
+                    running++;
+                    nAssigned++;
+                }
+            }
         }
 
-        if (edgeFree && !v_ppre.empty()) {
-            int best = -1;
-            double bu = -1e100;
-            for (int rid : v_ppre) {
-                double u = tdr_urg(rid, now);
-                if (u > bu) {
-                    bu = u;
+        if (edgeFree && !BK[B_PPOST].empty()) {
+            int best = BK[B_PPOST][0];
+            double bw = 1e300;
+            for (int rid : BK[B_PPOST]) {
+                double w = tPpost.get(R[rid].lin);
+                if (w < bw) {
+                    bw = w;
                     best = rid;
                 }
             }
-            if (best != -1) {
-                int c = pick_cloud();
-                edgeFree = false;
-                req[best].remote = c;
-                n_pre[c]++;
-                lin_pre[c] += req[best].lin;
-                go(best, State::P_PRE_RUNNING);
-                ans.push_back("E P PRE " + to_string(c) + " " + to_string(best));
-            }
+            as("E P POST ");
+            ai(R[best].cloud);
+            ac(' ');
+            ai(best);
+            ac('\n');
+            setSt(best, ST_PPOST_RUN);
+            bmove(best, -1);
+            edgeFree = false;
+            running++;
+            nAssigned++;
         }
 
+        if (edgeFree && !BK[B_ARR].empty()) {
+            int best = -1;
+            while (!qArr.empty()) {
+                int rid = qArr.top().second;
+                if (bid[rid] != B_ARR) {
+                    qArr.pop();
+                    continue;
+                }
+                best = rid;
+                qArr.pop();
+                break;
+            }
+            if (best < 0) best = BK[B_ARR].back();
+            int c = 0;
+            double bl = 1e300;
+            for (int i = 0; i < K; ++i) {
+                double load = nPre[i] * (S + tPproc.get(R[best].lin)) +
+                              nDec[i] * (S + tDproc.get(max(1, nDec[i])));
+                if (load < bl) {
+                    bl = load;
+                    c = i;
+                }
+            }
+            as("E P PRE ");
+            ai(c);
+            ac(' ');
+            ai(best);
+            ac('\n');
+            R[best].cloud = c;
+            nPre[c]++;
+            setSt(best, ST_PPRE_RUN);
+            bmove(best, -1);
+            edgeFree = false;
+            running++;
+            nAssigned++;
+        }
+
+        // ---- clouds ----
         for (int c = 0; c < K; ++c) {
             if (!cloudFree[c]) continue;
-            if (!v_dproc[c].empty()) {
+            if (!BK[B_DPROC + c].empty()) {
+                batch = BK[B_DPROC + c];
+                sort(batch.begin(), batch.end());
+                as("C");
+                ai(c);
+                as(" D PROC ");
+                ai(c);
+                ac(' ');
+                ai((long long)batch.size());
+                for (int rid : batch) {
+                    ac(' ');
+                    ai(rid);
+                    setSt(rid, ST_DPROC_RUN);
+                    bmove(rid, -1);
+                }
+                ac('\n');
                 cloudFree[c] = 0;
-                for (int rid : v_dproc[c]) go(rid, State::D_PROC_RUNNING);
-                string cmd = "C" + to_string(c) + " D PROC " + to_string(c) + " " +
-                             to_string(v_dproc[c].size());
-                for (int rid : v_dproc[c]) cmd += " " + to_string(rid);
-                ans.push_back(cmd);
+                running++;
+                nAssigned++;
                 continue;
             }
-            if (v_pproc[c].empty()) continue;
+            if (BK[B_PPROC + c].empty()) continue;
             int best = -1;
-            double bu = -1e100;
-            for (int rid : v_pproc[c]) {
-                double u = tdr_urg(rid, now);
-                if (u > bu) {
-                    bu = u;
-                    best = rid;
+            while (!qProc[c].empty()) {
+                int rid = qProc[c].top().second;
+                if (bid[rid] != B_PPROC + c) {
+                    qProc[c].pop();
+                    continue;
+                }
+                best = rid;
+                qProc[c].pop();
+                break;
+            }
+            if (best < 0) best = BK[B_PPROC + c].back();
+
+            Req& r = R[best];
+            int ls = r.next_ls, remain = LAYERS - ls, take = remain;
+            // Split only when a long prefill would otherwise pin this cloud and
+            // stall decode rounds that are being measured.
+            if (WC > 1e-9 && remain > 1 && nDec[c] > 0) {
+                double full = tPproc.get(r.lin) * (double)remain / LAYERS;
+                double perLayer = tPproc.get(r.lin) / LAYERS;
+                // Every piece pays S again, so only split when that overhead
+                // stays under a few percent of the prefill it protects.
+                int maxPieces = (int)floor(0.05 * full / S);
+                if (maxPieces >= 2) {
+                    double budget = max(20.0 * S, SLO2);
+                    int byBudget = (int)floor(budget / max(perLayer, 1e-9));
+                    int byOverhead = (remain + maxPieces - 1) / maxPieces;
+                    take = max(1, max(byBudget, byOverhead));
+                    take = min(take, remain);
                 }
             }
-            if (best == -1) continue;
-            int ls = req[best].next_ls;
-            int nly = numLayers - ls;
-            int le = ls + nly;
+            int le = ls + take;
+            as("C");
+            ai(c);
+            as(" P PROC ");
+            ai(ls);
+            ac(' ');
+            ai(le);
+            ac(' ');
+            ai(c);
+            ac(' ');
+            ai(best);
+            ac('\n');
+            r.next_ls = le;
+            if (le >= LAYERS) {
+                nPre[c]--;
+                nDec[c]++;
+            }
+            setSt(best, ST_PPROC_RUN);
+            bmove(best, -1);
             cloudFree[c] = 0;
-            req[best].next_ls = le;
-            go(best, State::P_PROC_RUNNING);
-            ans.push_back("C" + to_string(c) + " P PROC " + to_string(ls) + " " + to_string(le) +
-                          " " + to_string(c) + " " + to_string(best));
+            running++;
+            nAssigned++;
         }
 
-        cout << ans.size() << '\n';
-        for (const string& s : ans) cout << s << '\n';
-        cout.flush();
+        // Safety net: holding work is only legal while some event is still
+        // guaranteed to arrive. Otherwise the run is declared stuck and scores 0.
+        if (nAssigned == 0 && running == 0 && xfers == 0 && nLive > 0 && !edgeBusyNow) {
+            if (edgeFree && (!BK[B_ACT].empty() || !BK[B_FRESH].empty())) {
+                batch.clear();
+                for (int rid : BK[B_ACT]) batch.push_back(rid);
+                for (int rid : BK[B_FRESH]) batch.push_back(rid);
+                sort(batch.begin(), batch.end());
+                as("E D PRE -1 ");
+                ai((long long)batch.size());
+                for (int rid : batch) {
+                    ac(' ');
+                    ai(rid);
+                    setSt(rid, ST_DPRE_RUN);
+                    bmove(rid, -1);
+                }
+                ac('\n');
+                edgeFree = false;
+                running++;
+                nAssigned++;
+            }
+        }
+
+        io::oi(nAssigned);
+        io::oc('\n');
+        io::osn(ANS.data(), ANS.size());
+        io::oflush();
     }
 }

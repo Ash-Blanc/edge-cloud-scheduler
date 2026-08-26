@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Lightweight interactor for the Huawei/Codeforces 2251 scheduler.
+"""Local interactor + judge for Codeforces 2251A.
 
-Deterministic synthetic tests plus the official Example 1 workload.
-Used to catch protocol violations (stuck / illegal assignment) locally.
+Implements the statement's timing model (FIFO uplink/downlink, schedule cost S,
+piecewise-linear task-time table) so schedulers can be compared off-judge.
+
+tp_base and dist_base are measured by first running a one-request-at-a-time
+reference scheduler on the same workload, mirroring how the real judge defines
+them. That makes the reported points directly comparable to the judge's.
+
+Usage:
+    python3 tests/sim.py ./sched [./other ...]
 """
 from __future__ import annotations
 
 import heapq
 import math
+import random
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -23,16 +31,16 @@ class Req:
     remote: int = -1
     next_ls: int = 0
     tokens: int = 0
-    st: str = "new"  # new, ppre, wait_up, pproc_ready, pproc, wait_down, ppost_ready, ppost, dready, dpre, wait_dup, dproc_ready, dproc, wait_ddown, dpost_ready, dpost, fin
+    st: str = "new"
     tdr: Optional[float] = None
-    token_times: List[float] = field(default_factory=list)
+    toks: List[float] = field(default_factory=list)
 
 
 class Col:
-    def __init__(self, pts: List[Tuple[int, float]]):
+    def __init__(self, pts):
         self.p = sorted((s, t) for s, t in pts if t >= 0)
 
-    def get(self, m: int) -> float:
+    def get(self, m):
         p = self.p
         if not p:
             return 1.0
@@ -40,255 +48,222 @@ class Col:
             return p[0][1]
         if m >= p[-1][0]:
             return p[-1][1]
-        for i in range(len(p) - 1):
-            if p[i][0] <= m <= p[i + 1][0]:
-                s0, t0 = p[i]
-                s1, t1 = p[i + 1]
-                if s1 == s0:
-                    return t0
-                return t0 + (t1 - t0) * (m - s0) / (s1 - s0)
-        return p[-1][1]
+        lo, hi = 0, len(p) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if p[mid][0] <= m:
+                lo = mid
+            else:
+                hi = mid
+        (x0, y0), (x1, y1) = p[lo], p[hi]
+        if x1 == x0:
+            return y0
+        return y0 + (y1 - y0) * (m - x0) / (x1 - x0)
+
+
+class Case:
+    """A workload plus system parameters (scoring constants filled in later)."""
+
+    def __init__(self, K, S, lat, bw, bpt, layers, slo1, slo2, table, arrivals, wtp, wc):
+        self.K, self.S, self.lat, self.bw, self.bpt, self.layers = K, S, lat, bw, bpt, layers
+        self.slo1, self.slo2 = slo1, slo2
+        self.table = table
+        self.arrivals = arrivals
+        self.wtp, self.wc = wtp, wc
+        self.tp_base = 0.0
+        self.tp_ub = 1.0
+        self.dist_base = 0.0
 
 
 class Sim:
-    def __init__(self, K, S, lat, bw, bpt, layers, slo1, slo2, tpub, tpbase, distbase, wtp, wc,
-                 table, arrivals):
-        self.K, self.S, self.lat, self.bw, self.bpt, self.layers = K, S, lat, bw, bpt, layers
-        self.slo1, self.slo2 = slo1, slo2
-        self.tpub, self.tpbase, self.distbase, self.wtp, self.wc = tpub, tpbase, distbase, wtp, wc
-        self.ppre = Col([(b, a) for b, a, *_ in table])
-        self.pproc = Col([(b, x[1]) for b, *x in table])
-        self.ppost = Col([(b, x[2]) for b, *x in table])
-        self.dpre = Col([(b, x[3]) for b, *x in table])
-        self.dproc = Col([(b, x[4]) for b, *x in table])
-        self.dpost = Col([(b, x[5]) for b, *x in table])
-        self.arrivals = list(arrivals)  # (t, lin, lout)
+    def __init__(self, case: Case):
+        c = case
+        self.c = c
+        self.ppre = Col([(r[0], r[1]) for r in c.table])
+        self.pproc = Col([(r[0], r[2]) for r in c.table])
+        self.ppost = Col([(r[0], r[3]) for r in c.table])
+        self.dpre = Col([(r[0], r[4]) for r in c.table])
+        self.dproc = Col([(r[0], r[5]) for r in c.table])
+        self.dpost = Col([(r[0], r[6]) for r in c.table])
         self.reqs: List[Req] = []
-        self.edge_busy_until = 0.0
-        self.cloud_busy_until = [0.0] * K
         self.up_free = 0.0
         self.down_free = 0.0
-        self.events: List[Tuple[float, int, str, dict]] = []
+        self.ev: List[Tuple[float, int, str, dict]] = []
         self.seq = 0
         self.edge_task = None
-        self.cloud_task = [None] * K
+        self.cloud_task = [None] * c.K
         self.t = 0.0
-        self.arr_i = 0
-        for t, lin, lout in self.arrivals:
+        self.stats = {k: [0, 0, 0.0] for k in
+                      ("P PRE", "P PROC", "P POST", "D PRE", "D PROC", "D POST")}
+        self.edge_busy = 0.0
+        self.cloud_busy = 0.0
+        for (t, lin, lout) in c.arrivals:
             self.push(t, "ARR", {"lin": lin, "lout": lout})
 
-    def push(self, t, kind, payload):
-        heapq.heappush(self.events, (t, self.seq, kind, payload))
+    def push(self, t, kind, p):
+        heapq.heappush(self.ev, (t, self.seq, kind, p))
         self.seq += 1
 
-    def xfer(self, length: int) -> float:
-        return self.lat + 8.0 * length * self.bpt / (self.bw * 1e6)
+    def xfer(self, ln):
+        return self.c.lat + 8.0 * ln * self.c.bpt / (self.c.bw * 1e6)
 
-    def start_up(self, t, length, typ, rids, remote):
+    def q_up(self, t, ln, kind, rids, rem):
         st = max(t, self.up_free)
-        dur = self.xfer(length)
-        self.up_free = st + dur
-        self.push(st + dur, "XDN", {"dir": "UP", "remote": remote, "size": length * self.bpt, "typ": typ, "rids": rids})
+        self.up_free = st + self.xfer(ln)
+        self.push(self.up_free, "XDN",
+                  {"dir": "UP", "rem": rem, "size": int(ln * self.c.bpt), "kind": kind, "rids": rids})
 
-    def start_down(self, t, length, typ, rids, remote):
+    def q_down(self, t, ln, kind, rids, rem):
         st = max(t, self.down_free)
-        dur = self.xfer(length)
-        self.down_free = st + dur
-        self.push(st + dur, "XDN", {"dir": "DOWN", "remote": remote, "size": length * self.bpt, "typ": typ, "rids": rids})
+        self.down_free = st + self.xfer(ln)
+        self.push(self.down_free, "XDN",
+                  {"dir": "DOWN", "rem": rem, "size": int(ln * self.c.bpt), "kind": kind, "rids": rids})
 
-    def collect_frame(self):
-        if not self.events:
-            return None
-        t, _, kind, payload = heapq.heappop(self.events)
-        frame = [(kind, payload)]
-        while self.events and abs(self.events[0][0] - t) < 1e-12:
-            _, _, k2, p2 = heapq.heappop(self.events)
-            frame.append((k2, p2))
-        return t, frame
+    def frame(self):
+        t, _, kind, p = heapq.heappop(self.ev)
+        evs = [(kind, p)]
+        while self.ev and abs(self.ev[0][0] - t) < 1e-12:
+            _, _, k2, p2 = heapq.heappop(self.ev)
+            evs.append((k2, p2))
+        return t, evs
 
-    def apply_event(self, kind, p):
+    def apply(self, kind, p) -> List[str]:
+        out = []
         if kind == "ARR":
             rid = len(self.reqs)
-            r = Req(rid, p["lin"], p["lout"], self.t)
-            self.reqs.append(r)
-            return f"ARR {rid} {r.lin}"
-        if kind == "TDN":
+            self.reqs.append(Req(rid, p["lin"], p["lout"], self.t))
+            out.append(f"ARR {rid} {p['lin']}")
+        elif kind == "TDN":
             server, spec, dur = p["server"], p["spec"], p["dur"]
             if server == "E":
                 self.edge_task = None
-                self.edge_busy_until = self.t
             else:
-                c = int(server[1:])
-                self.cloud_task[c] = None
-                self.cloud_busy_until[c] = self.t
-            parts = spec.split()
-            phase, typ = parts[0], parts[1]
+                self.cloud_task[int(server[1:])] = None
+            f = spec.split()
+            phase, ty = f[0], f[1]
             if phase == "P":
-                if typ == "PRE":
-                    rid = int(parts[3])
+                if ty == "PRE":
+                    rid = int(f[3])
                     r = self.reqs[rid]
-                    r.st = "wait_up"
-                    self.start_up(self.t, r.lin, "PRE", [rid], r.remote)
-                elif typ == "PROC":
-                    ls, le, remote, rid = int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
+                    self.q_up(self.t, r.lin, "PRE", [rid], r.remote)
+                    r.st = "up"
+                elif ty == "PROC":
+                    le, rid = int(f[3]), int(f[5])
                     r = self.reqs[rid]
                     r.next_ls = le
-                    if le >= self.layers:
-                        r.st = "wait_down"
-                        self.start_down(self.t, r.lin, "PRE", [rid], r.remote)
+                    if le >= self.c.layers:
+                        r.st = "down"
+                        self.q_down(self.t, r.lin, "PRE", [rid], r.remote)
                     else:
                         r.st = "pproc_ready"
                 else:
-                    rid = int(parts[3])
+                    rid = int(f[3])
                     r = self.reqs[rid]
-                    r.st = "dready"
+                    r.st = "didle"
                     r.tdr = self.t - r.arr
             else:
-                m = int(parts[3])
-                rids = list(map(int, parts[4:4 + m]))
-                if typ == "PRE":
-                    by = {}
+                m = int(f[3])
+                rids = [int(x) for x in f[4:4 + m]]
+                if ty == "PRE":
+                    by: Dict[int, List[int]] = {}
                     for rid in rids:
-                        self.reqs[rid].st = "wait_dup"
+                        self.reqs[rid].st = "dup"
                         by.setdefault(self.reqs[rid].remote, []).append(rid)
                     for c in sorted(by):
-                        self.start_up(self.t, len(by[c]), "DEC", by[c], c)
-                elif typ == "PROC":
-                    remote = int(parts[2])
-                    m = int(parts[3])
-                    rids = list(map(int, parts[4:4 + m]))
+                        self.q_up(self.t, len(by[c]), "DEC", by[c], c)
+                elif ty == "PROC":
+                    rem = int(f[2])
                     for rid in rids:
-                        self.reqs[rid].st = "wait_ddown"
-                    self.start_down(self.t, m, "DEC", rids, remote)
+                        self.reqs[rid].st = "ddown"
+                    self.q_down(self.t, len(rids), "DEC", rids, rem)
                 else:
                     for rid in rids:
                         r = self.reqs[rid]
                         r.tokens += 1
-                        r.token_times.append(self.t)
-                        if r.tokens >= r.lout:
-                            r.st = "fin"
-                        else:
-                            r.st = "dready"
-            extra = []
-            if phase == "D" and typ == "POST":
+                        r.toks.append(self.t)
+                        r.st = "fin" if r.tokens >= r.lout else "didle"
+            out.append(f"TDN {server} {spec} {dur:.9f}")
+            if phase == "D" and ty == "POST":
                 for rid in rids:
                     if self.reqs[rid].st == "fin":
-                        extra.append(f"FIN {rid}")
-            line = f"TDN {server} {spec} {dur:.9f}"
-            return line, extra
-        if kind == "XDN":
+                        out.append(f"FIN {rid}")
+        else:  # XDN
             for rid in p["rids"]:
                 r = self.reqs[rid]
-                if p["typ"] == "PRE":
+                if p["kind"] == "PRE":
                     r.st = "pproc_ready" if p["dir"] == "UP" else "ppost_ready"
                 else:
                     r.st = "dproc_ready" if p["dir"] == "UP" else "dpost_ready"
             ids = " ".join(str(x) for x in p["rids"])
-            return f"XDN {p['dir']} {p['remote']} {p['size']} {p['typ']} {len(p['rids'])} {ids}"
-        raise RuntimeError(kind)
-
-    def fmt_frame(self, t, evs):
-        lines = [f"{t:.9f}", str(len(evs))]
-        extras_fin = []
-        body = []
-        for kind, p in evs:
-            out = self.apply_event(kind, p)
-            if isinstance(out, tuple):
-                body.append(out[0])
-                extras_fin.extend(out[1])
-            else:
-                body.append(out)
-        # FIN shares TDN timestamp; already same frame if we added during apply
-        if extras_fin:
-            # recount: we need FIN in the same frame
-            pass
-        all_lines = body + extras_fin
-        lines = [f"{t:.9f}", str(len(all_lines))] + all_lines
-        return "\n".join(lines) + "\n"
-
-    def busy_edge(self):
-        return self.edge_task is not None
-
-    def busy_cloud(self, c):
-        return self.cloud_task[c] is not None
+            out.append(f"XDN {p['dir']} {p['rem']} {p['size']} {p['kind']} {len(p['rids'])} {ids}")
+        return out
 
     def assign(self, cmd: str):
-        tok = cmd.split()
-        server = tok[0]
-        spec = " ".join(tok[1:])
-        if server == "E":
-            if self.busy_edge():
+        t = cmd.split()
+        srv = t[0]
+        spec = " ".join(t[1:])
+        S = self.c.S
+        if srv == "E":
+            if self.edge_task is not None:
                 raise RuntimeError("edge busy: " + cmd)
-            phase, typ = tok[1], tok[2]
-            if phase == "P" and typ == "PRE":
-                remote, rid = int(tok[3]), int(tok[4])
+            phase, ty = t[1], t[2]
+            if phase == "P" and ty == "PRE":
+                rem, rid = int(t[3]), int(t[4])
                 r = self.reqs[rid]
                 if r.st != "new":
-                    raise RuntimeError("bad P PRE state " + r.st)
-                if not (0 <= remote < self.K):
-                    raise RuntimeError("bad remote")
-                r.remote = remote
+                    raise RuntimeError(f"P PRE on state {r.st}")
+                if not (0 <= rem < self.c.K):
+                    raise RuntimeError("remote out of range")
+                r.remote = rem
                 r.st = "ppre"
                 dur = self.ppre.get(r.lin)
-                self.edge_task = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": "E", "spec": spec, "dur": dur})
-            elif phase == "P" and typ == "POST":
-                remote, rid = int(tok[3]), int(tok[4])
+            elif phase == "P" and ty == "POST":
+                rem, rid = int(t[3]), int(t[4])
                 r = self.reqs[rid]
-                if r.st != "ppost_ready" or r.remote != remote:
+                if r.st != "ppost_ready" or r.remote != rem:
                     raise RuntimeError("bad P POST")
                 r.st = "ppost"
                 dur = self.ppost.get(r.lin)
-                self.edge_task = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": "E", "spec": spec, "dur": dur})
-            elif phase == "D" and typ == "PRE":
-                m = int(tok[4])
-                rids = list(map(int, tok[5:5 + m]))
-                if m != len(rids) or len(set(rids)) != m:
-                    raise RuntimeError("bad D PRE group")
+            elif phase == "D" and ty in ("PRE", "POST"):
+                m = int(t[4])
+                rids = [int(x) for x in t[5:5 + m]]
+                if len(rids) != m or len(set(rids)) != m:
+                    raise RuntimeError("bad group")
+                need = "didle" if ty == "PRE" else "dpost_ready"
                 for rid in rids:
-                    if self.reqs[rid].st != "dready":
-                        raise RuntimeError("bad D PRE member " + self.reqs[rid].st)
-                    self.reqs[rid].st = "dpre"
-                dur = self.dpre.get(m)
-                self.edge_task = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": "E", "spec": spec, "dur": dur})
-            elif phase == "D" and typ == "POST":
-                m = int(tok[4])
-                rids = list(map(int, tok[5:5 + m]))
-                if m != len(rids) or len(set(rids)) != m:
-                    raise RuntimeError("bad D POST group")
-                for rid in rids:
-                    if self.reqs[rid].st != "dpost_ready":
-                        raise RuntimeError("bad D POST member " + self.reqs[rid].st)
-                    self.reqs[rid].st = "dpost"
-                dur = self.dpost.get(m)
-                self.edge_task = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": "E", "spec": spec, "dur": dur})
+                    if self.reqs[rid].st != need:
+                        raise RuntimeError(f"D {ty} member {rid} in state {self.reqs[rid].st}")
+                    self.reqs[rid].st = "dpre" if ty == "PRE" else "dpost"
+                dur = (self.dpre if ty == "PRE" else self.dpost).get(m)
             else:
-                raise RuntimeError("unknown edge " + cmd)
+                raise RuntimeError("bad edge cmd " + cmd)
+            self.edge_task = spec
+            key = f"{phase} {ty}"
+            grp = len(rids) if phase == "D" else 1
+            st = self.stats[key]
+            st[0] += 1
+            st[1] += grp
+            st[2] += S + dur
+            self.edge_busy += S + dur
+            self.push(self.t + S + dur, "TDN", {"server": "E", "spec": spec, "dur": dur})
         else:
-            c = int(server[1:])
-            if self.busy_cloud(c):
-                raise RuntimeError("cloud busy " + cmd)
-            phase, typ = tok[1], tok[2]
-            if phase == "P" and typ == "PROC":
-                ls, le, remote, rid = int(tok[3]), int(tok[4]), int(tok[5]), int(tok[6])
+            c = int(srv[1:])
+            if self.cloud_task[c] is not None:
+                raise RuntimeError("cloud busy: " + cmd)
+            phase, ty = t[1], t[2]
+            if phase == "P":
+                ls, le, rem, rid = int(t[3]), int(t[4]), int(t[5]), int(t[6])
                 r = self.reqs[rid]
-                if r.st != "pproc_ready" or r.remote != c or remote != c:
-                    raise RuntimeError("bad P PROC state")
-                if ls != r.next_ls or le <= ls or le > self.layers:
-                    raise RuntimeError(f"bad piece {ls} {le} next={r.next_ls}")
+                if r.st != "pproc_ready" or r.remote != c or rem != c:
+                    raise RuntimeError("bad P PROC")
+                if ls != r.next_ls or le <= ls or le > self.c.layers:
+                    raise RuntimeError(f"bad piece [{ls},{le}) expected ls={r.next_ls}")
                 r.st = "pproc"
-                frac = (le - ls) / self.layers
-                dur = frac * self.pproc.get(r.lin)
-                self.cloud_task[c] = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": server, "spec": spec, "dur": dur})
-            elif phase == "D" and typ == "PROC":
-                remote = int(tok[3])
-                m = int(tok[4])
-                rids = list(map(int, tok[5:5 + m]))
-                if remote != c or m != len(rids) or len(set(rids)) != m:
+                dur = (le - ls) / self.c.layers * self.pproc.get(r.lin)
+            else:
+                rem, m = int(t[3]), int(t[4])
+                rids = [int(x) for x in t[5:5 + m]]
+                if rem != c or len(rids) != m or len(set(rids)) != m:
                     raise RuntimeError("bad D PROC")
                 for rid in rids:
                     r = self.reqs[rid]
@@ -296,224 +271,254 @@ class Sim:
                         raise RuntimeError("bad D PROC member")
                     r.st = "dproc"
                 dur = self.dproc.get(m)
-                self.cloud_task[c] = spec
-                self.push(self.t + self.S + dur, "TDN", {"server": server, "spec": spec, "dur": dur})
-            else:
-                raise RuntimeError("unknown cloud " + cmd)
+            self.cloud_task[c] = spec
+            key = f"{phase} {ty}"
+            grp = len(rids) if phase == "D" else 1
+            st = self.stats[key]
+            st[0] += 1
+            st[1] += grp
+            st[2] += S + dur
+            self.cloud_busy += S + dur
+            self.push(self.t + S + dur, "TDN", {"server": srv, "spec": spec, "dur": dur})
 
-    def unfinished(self):
-        return any(r.st != "fin" for r in self.reqs) or self.arr_i < len(self.arrivals) or self.events
-
-    def score(self):
+    def metrics(self):
         if not self.reqs or any(r.st != "fin" for r in self.reqs):
-            return 0.0
-        tot_tok = sum(r.lout for r in self.reqs)
+            return None
+        tot = sum(r.lout for r in self.reqs)
         t0 = min(r.arr for r in self.reqs)
-        t1 = max(r.token_times[-1] for r in self.reqs)
-        tp = tot_tok / max(t1 - t0, 1e-12)
-        def clamp(x, base, target):
-            if target == base:
-                return 1.0 if x >= target else 0.0
-            return max(0.0, min(1.0, (x - base) / (target - base)))
+        t1 = max(r.toks[-1] for r in self.reqs)
+        tp = tot / max(t1 - t0, 1e-12)
         tdr = sum(r.tdr for r in self.reqs) / len(self.reqs)
-        gaps = []
-        for r in self.reqs:
-            for a, b in zip(r.token_times, r.token_times[1:]):
-                gaps.append(b - a)
+        gaps = [b - a for r in self.reqs for a, b in zip(r.toks, r.toks[1:])]
         tpot = sum(gaps) / len(gaps) if gaps else 0.0
-        ex_tdr = max(0.0, (tdr - self.slo1) / self.slo1)
-        ex_tpot = max(0.0, (tpot - self.slo2) / self.slo2)
-        dist = math.sqrt(ex_tdr ** 2 + ex_tpot ** 2)
-        if self.distbase > 0:
-            wait_c = max(0.0, 1.0 - dist / self.distbase)
-        else:
-            wait_c = 1.0 if dist == 0 else 0.0
-        ns = self.wtp * clamp(tp, self.tpbase, self.tpub) + self.wc * wait_c
-        return 1000.0 * ns, tp, tdr, tpot, dist
+        return tp, tdr, tpot
 
 
-def run(bin_path: str, sim: Sim) -> float:
-    proc = subprocess.Popen(
-        [bin_path],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    assert proc.stdin and proc.stdout
-    header = (
-        f"{sim.K} {sim.S:.9f} {sim.lat:.9f} {sim.bw:.9f} {sim.bpt} {sim.layers}\n"
-        f"{sim.slo1:.9f} {sim.slo2:.9f} {sim.tpub:.9f} {sim.tpbase:.9f} {sim.distbase:.9f} {sim.wtp:.9f} {sim.wc:.9f}\n"
-    )
-    # rebuild table from cols — use original via arrivals only; pass table rows stored on sim
-    # We stored table in constructor via Cols only. Re-send a dense table from Cols points.
-    rows = {}
-    for col_name, col in [("ppre", sim.ppre), ("pproc", sim.pproc), ("ppost", sim.ppost),
-                          ("dpre", sim.dpre), ("dproc", sim.dproc), ("dpost", sim.dpost)]:
-        for s, t in col.p:
-            rows.setdefault(s, [s, -1, -1, -1, -1, -1, -1])
-    for s, t in sim.ppre.p:
-        rows[s][1] = t
-    for s, t in sim.pproc.p:
-        rows[s][2] = t
-    for s, t in sim.ppost.p:
-        rows[s][3] = t
-    for s, t in sim.dpre.p:
-        rows[s][4] = t
-    for s, t in sim.dproc.p:
-        rows[s][5] = t
-    for s, t in sim.dpost.p:
-        rows[s][6] = t
-    tbl = sorted(rows.values())
-    header += f"{len(tbl)}\n"
-    for r in tbl:
-        header += f"{r[0]} " + " ".join(f"{x:.9f}" if isinstance(x, float) else str(x) for x in r[1:]) + "\n"
-    proc.stdin.write(header)
+def run(binary: str, case: Case, timeout=120.0):
+    sim = Sim(case)
+    c = case
+    proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            text=True, bufsize=1)
+    hdr = [f"{c.K} {c.S:.9f} {c.lat:.9f} {c.bw:.9f} {c.bpt} {c.layers}",
+           f"{c.slo1:.9f} {c.slo2:.9f} {c.tp_ub:.9f} {c.tp_base:.9f} {c.dist_base:.9f} "
+           f"{c.wtp:.9f} {c.wc:.9f}",
+           str(len(c.table))]
+    for row in c.table:
+        hdr.append(f"{row[0]} " + " ".join(f"{v:.9f}" for v in row[1:]))
+    proc.stdin.write("\n".join(hdr) + "\n")
     proc.stdin.flush()
 
-    steps = 0
+    frames = 0
     while True:
-        if not sim.events:
-            # all done?
-            if all(r.st == "fin" for r in sim.reqs) and sim.reqs:
+        if not sim.ev:
+            if sim.reqs and all(r.st == "fin" for r in sim.reqs):
                 proc.stdin.write("END\n")
                 proc.stdin.flush()
                 proc.stdin.close()
-                proc.wait(timeout=5)
-                sc = sim.score()
-                return sc[0] if isinstance(sc, tuple) else sc
-            raise RuntimeError("stuck: no events, unfinished")
-        t, evs = sim.collect_frame()
+                proc.wait(timeout=10)
+                return sim.metrics(), frames, sim
+            raise RuntimeError("stuck: no future event with unfinished requests")
+        t, evs = sim.frame()
         sim.t = t
-        frame = sim.fmt_frame(t, evs)
-        proc.stdin.write(frame)
+        lines = []
+        for kind, p in evs:
+            lines.extend(sim.apply(kind, p))
+        proc.stdin.write(f"{t:.9f}\n{len(lines)}\n" + "\n".join(lines) + "\n")
         proc.stdin.flush()
-        nline = proc.stdout.readline()
-        if not nline:
-            raise RuntimeError("solver exited")
-        n = int(nline.strip())
-        cmds = []
+        head = proc.stdout.readline()
+        if not head:
+            raise RuntimeError("scheduler closed the stream")
+        n = int(head.strip())
+        seen = set()
         for _ in range(n):
-            cmds.append(proc.stdout.readline().strip())
-        seen_server = set()
-        for cmd in cmds:
+            cmd = proc.stdout.readline().strip()
             srv = cmd.split()[0]
-            if srv in seen_server:
-                raise RuntimeError("two tasks on " + srv)
-            seen_server.add(srv)
+            if srv in seen:
+                raise RuntimeError("two tasks assigned to " + srv)
+            seen.add(srv)
             sim.assign(cmd)
-        steps += 1
-        if steps > 500000:
-            raise RuntimeError("too many steps")
+        frames += 1
+        if frames > 3_000_000:
+            raise RuntimeError("frame limit")
 
 
-def example1():
-    table = [
-        (1, 3.0, 10.0, 2.0, 1.0, 4.0, 1.0),
-        (4, 3.0, 10.0, 2.0, 1.0, 4.0, 1.0),
-    ]
-    return Sim(1, 1.0, 2.0, 1.0, 125000, 4,
-               30.0, 15.0, 0.0625, 0.022222222, 0.0, 0.5, 0.5,
-               table, [(0.0, 4, 1)])
+def score(case: Case, m):
+    tp, tdr, tpot = m
+    ntp = 0.0
+    if case.tp_ub > case.tp_base:
+        ntp = max(0.0, min(1.0, (tp - case.tp_base) / (case.tp_ub - case.tp_base)))
+    ex1 = max(0.0, (tdr - case.slo1) / case.slo1)
+    ex2 = max(0.0, (tpot - case.slo2) / case.slo2)
+    dist = math.hypot(ex1, ex2)
+    if case.dist_base > 0:
+        nc = max(0.0, 1.0 - dist / case.dist_base)
+    else:
+        nc = 1.0 if dist <= 1e-12 else 0.0
+    return 1000.0 * (case.wtp * ntp + case.wc * nc), ntp, nc, dist
 
 
-def synth(seed: int, K: int, R: int, layers: int):
-    import random
+def make_table(kind, rng):
+    """Task times. Decode is strongly sublinear in batch size, which is what
+    makes batching the dominant lever; prefill scales with input length."""
+    rows = []
+    sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    if kind == "gpu":
+        pp, pr, po = 0.05, 0.9, 0.04
+        dp, dr, dq = 0.30, 1.8, 0.30
+        dpc, drc, dqc = 0.004, 0.05, 0.004
+    else:
+        pp, pr, po = 0.20, 2.5, 0.15
+        dp, dr, dq = 0.80, 4.0, 0.80
+        dpc, drc, dqc = 0.02, 0.30, 0.02
+    for b in sizes:
+        rows.append((b,
+                     pp + pr * 0.02 * b,
+                     pr * b * 0.35 + 2.0,
+                     po + pr * 0.01 * b,
+                     dp + dpc * b,
+                     dr + drc * b,
+                     dq + dqc * b))
+    return rows
+
+
+def make_case(name, seed, K, R, layers, span, wtp, a1, a2, kind="gpu",
+              lat=1.0, bw=10.0, bpt=32768, S=2.0, lin_hi=1024, lout_hi=128):
+    """span is the arrival window in ms; a small span means a saturated backlog,
+    which is the regime the judge's hard tests live in."""
     rng = random.Random(seed)
-    table = []
-    for b in [1, 2, 4, 8, 16, 32, 64, 128]:
-        table.append((
-            b,
-            0.4 + 0.02 * b,          # ppre ~ slow grow with Lin
-            2.0 + 0.15 * b,          # pproc
-            0.3 + 0.01 * b,          # ppost
-            0.2 + 0.03 * math.log2(b + 1),  # dpre
-            0.8 + 0.12 * b,          # dproc more linear
-            0.2 + 0.02 * math.log2(b + 1),
-        ))
+    table = make_table(kind, rng)
     arrivals = []
-    t = 0.0
-    for i in range(R):
-        t += rng.expovariate(1 / 8.0)
-        lin = rng.choice([8, 16, 32, 64, 128, 256])
-        lout = rng.choice([1, 2, 4, 8, 16, 32])
+    for _ in range(R):
+        t = rng.uniform(0.0, span)
+        lin = rng.choice([x for x in [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] if x <= lin_hi])
+        lout = rng.choice([x for x in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] if x <= lout_hi])
         arrivals.append((t, lin, lout))
-    S = 0.8
-    lat = 0.5
-    bw = 10.0
-    bpt = 4096
-    slo1 = 80.0
-    slo2 = 12.0
-    return Sim(K, S, lat, bw, bpt, layers,
-               slo1, slo2, 0.5, 0.02, 1.5, 0.6, 0.4,
-               table, arrivals)
+    arrivals.sort(key=lambda x: x[0])
+    c = Case(K, S, lat, bw, bpt, layers, 1.0, 1.0, table, arrivals, wtp, 1.0 - wtp)
+    c.name = name
+    c._a1, c._a2 = a1, a2
+    return c
 
 
-def synth_hard(seed: int, K: int, R: int, layers: int):
-    import random
-    rng = random.Random(seed)
-    table = []
-    for b in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]:
-        table.append((
-            b,
-            0.5 + 0.01 * b,
-            3.0 + 0.22 * b,
-            0.4 + 0.008 * b,
-            0.25 + 0.04 * math.log2(b + 1),
-            0.5 + 0.08 * b,
-            0.25 + 0.03 * math.log2(b + 1),
-        ))
-    arrivals = []
-    t = 0.0
-    for i in range(R):
-        if rng.random() < 0.15:
-            t += rng.uniform(20.0, 40.0)
-        else:
-            t += rng.expovariate(1 / 2.5)
-        lin = rng.choice([16, 32, 64, 128, 256, 512])
-        lout = rng.choice([4, 8, 16, 32, 64])
-        arrivals.append((t, lin, lout))
-    return Sim(K, 1.2, 1.0, 4.0, 8192, layers,
-               40.0, 6.0, 1.2, 0.05, 2.0, 0.55, 0.45,
-               table, arrivals)
+def calibrate(case: Case, ref_bin: str):
+    """Mirror the judge: measure the one-request-at-a-time reference, then set
+    tp_base / dist_base from it. SLOs are placed as a fraction of the reference's
+    own latency so dist_base lands in a range comparable to the real tests."""
+    case.slo1, case.slo2 = 1e18, 1e18
+    case.tp_base, case.tp_ub, case.dist_base = 0.0, 1.0, 0.0
+    (tp, tdr, tpot), _, _ = run(ref_bin, case)
+    case.ref = (tp, tdr, tpot)
+    case.tp_base = tp
+    case.slo1 = max(tdr * case._a1, 1e-3)
+    case.slo2 = max(tpot * case._a2, 1e-3) if tpot > 0 else 1e-3
+    ex1 = max(0.0, (tdr - case.slo1) / case.slo1)
+    ex2 = max(0.0, (tpot - case.slo2) / case.slo2)
+    case.dist_base = math.hypot(ex1, ex2)
+    sim = Sim(case)
+    ideal = 0.0
+    for m in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]:
+        k = min(case.K, m)
+        per = math.ceil(m / k)
+        edge = 2 * case.S + sim.dpre.get(m) + sim.dpost.get(m)
+        link = 2 * (k * case.lat + 8.0 * m * case.bpt / (case.bw * 1e6))
+        proc = case.S + sim.dproc.get(per)
+        ideal = max(ideal, m / (edge + link + proc))
+    case.tp_ub = max(min(ideal, case.tp_base * 25.0), case.tp_base * 2.0 + 1e-12)
+    return case
+
+
+def build_cases():
+    c = []
+    # Saturated, throughput-dominant (judge tests 19 / 16 / 12 look like this).
+    c.append(make_case("tp-sat-K8", 11, 8, 400, 16, 50.0, 1.00, 0.05, 0.05))
+    c.append(make_case("tp-sat-K4", 12, 4, 250, 8, 50.0, 0.98, 0.05, 0.05))
+    c.append(make_case("tp-burst-K2", 13, 2, 150, 4, 20.0, 0.80, 0.10, 0.10))
+    # Latency-dominant with a tight reference (judge test 3).
+    c.append(make_case("lat-only-K4", 21, 4, 120, 16, 4000.0, 0.00, 0.60, 0.60))
+    c.append(make_case("lat-heavy-K8", 22, 8, 250, 32, 3000.0, 0.05, 0.30, 0.30))
+    c.append(make_case("lat-mid-K4", 23, 4, 180, 8, 2000.0, 0.15, 0.20, 0.20))
+    # Balanced.
+    c.append(make_case("bal-K4", 31, 4, 200, 16, 800.0, 0.50, 0.15, 0.15))
+    c.append(make_case("bal-K1", 32, 1, 80, 4, 600.0, 0.50, 0.20, 0.20))
+    c.append(make_case("bal-K8-cpu", 33, 8, 250, 64, 900.0, 0.45, 0.15, 0.15, kind="cpu"))
+    # Link latency dominates: transfer amortisation is the lever.
+    c.append(make_case("hi-lat-K4", 41, 4, 180, 8, 400.0, 0.65, 0.15, 0.15, lat=20.0, bw=2.0))
+    c.append(make_case("hi-lat-K8", 42, 8, 220, 16, 300.0, 0.35, 0.15, 0.15, lat=35.0, bw=1.0))
+    # Large schedule cost: every task pays S, so task count matters most.
+    c.append(make_case("bigS-K4", 51, 4, 200, 8, 400.0, 0.60, 0.15, 0.15, S=9.0))
+    # Long outputs, few requests: decode-dominated.
+    c.append(make_case("longout-K4", 61, 4, 60, 8, 200.0, 0.55, 0.20, 0.20, lout_hi=512))
+    # Wide inputs: prefill-dominated.
+    c.append(make_case("bigin-K8", 71, 8, 150, 32, 600.0, 0.40, 0.15, 0.15, lin_hi=4096))
+    return c
 
 
 def main():
-    bin_path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/sched"
-    tests = [("example1", example1())]
-    for seed, K, R, L in [
-        (1, 2, 8, 4),
-        (2, 4, 20, 8),
-        (3, 8, 40, 16),
-        (4, 3, 15, 1),
-        (5, 2, 12, 32),
-        (6, 4, 60, 8),
-        (7, 8, 80, 16),
-        (8, 1, 20, 4),
-    ]:
-        tests.append((f"synth{seed}", synth(seed, K, R, L)))
-    for seed, K, R, L in [
-        (11, 4, 40, 8),
-        (12, 8, 50, 16),
-        (13, 2, 30, 32),
-    ]:
-        tests.append((f"hard{seed}", synth_hard(seed, K, R, L)))
-    ok = True
-    for name, sim in tests:
-        try:
-            sc = run(bin_path, sim)
-            detail = sim.score()
-            extra = ""
-            if isinstance(detail, tuple) and len(detail) >= 5:
-                extra = f"  tp={detail[1]:.4f} tdr={detail[2]:.2f} tpot={detail[3]:.2f} dist={detail[4]:.3f}"
-            print(f"{name:12s}  score={sc:.3f}  R={len(sim.reqs)}{extra}")
-        except Exception as e:
-            ok = False
-            print(f"{name:12s}  FAIL: {e}")
-    if not ok:
-        sys.exit(1)
+    bins = sys.argv[1:] or ["./sched"]
+    ref = "/tmp/ref_sequential"
+    cases = build_cases()
+    print("calibrating tp_base / dist_base against the sequential reference ...")
+    for c in cases:
+        calibrate(c, ref)
 
+    totals = {b: 0.0 for b in bins}
+    fails = {b: 0 for b in bins}
+    nw = max(len(c.name) for c in cases) + 1
+    names = [b.split("/")[-1] for b in bins]
+    print()
+    print(f"{'case':<{nw}} {'w_tp':>5} {'dbase':>8}  " +
+          "  ".join(f"{n:^34}" for n in names))
+    print(f"{'':<{nw}} {'':>5} {'':>8}  " +
+          "  ".join(f"{'pts':>7} {'tp':>9} {'tdr':>8} {'tpot':>7}" for _ in names))
+    print("-" * (nw + 18 + 36 * len(names)))
+    for c in cases:
+        cells = []
+        for b in bins:
+            try:
+                m, frames, sm = run(b, c)
+                if m is None:
+                    raise RuntimeError("unfinished")
+                pts, ntp, nc, dist = score(c, m)
+                totals[b] += pts
+                tp, tdr, tpot = m
+                cells.append(f"{pts:7.1f} {tp:9.4f} {tdr:8.1f} {tpot:7.2f}")
+            except Exception as e:
+                fails[b] += 1
+                cells.append(f"{('FAIL ' + str(e))[:34]:<34}")
+        print(f"{c.name:<{nw}} {c.wtp:5.2f} {c.dist_base:8.2f}  " + "  ".join(cells))
+    print("-" * (nw + 18 + 36 * len(names)))
+    base = totals[bins[0]]
+    print(f"{'TOTAL':<{nw}} {'':>5} {'':>8}  " +
+          "  ".join(f"{totals[b]:>10.1f} ({fails[b]} fail)        " for b in bins))
+    print(f"{'MEAN/1000':<{nw}} {'':>5} {'':>8}  " +
+          "  ".join(f"{totals[b]/len(cases):>10.1f}{'':>22}" for b in bins))
+    for b in bins[1:]:
+        d = totals[b] - base
+        print(f"  delta vs {names[0]}: {d:+.1f} total  ({d/len(cases):+.1f} per case)")
+
+
+def detail(bins, case_name):
+    ref = "/tmp/ref_sequential"
+    cases = {c.name: c for c in build_cases()}
+    c = cases[case_name]
+    calibrate(c, ref)
+    for b in bins:
+        m, frames, sm = run(b, c)
+        pts, ntp, nc, dist = score(c, m)
+        tp, tdr, tpot = m
+        print(f"\n=== {b.split('/')[-1]} on {case_name}: pts={pts:.1f} "
+              f"tp={tp:.4f} tdr={tdr:.1f} tpot={tpot:.2f} frames={frames}")
+        span = max(r.toks[-1] for r in sm.reqs) - min(r.arr for r in sm.reqs)
+        print(f"    makespan={span:.1f}  edge_busy={sm.edge_busy:.1f} "
+              f"({100*sm.edge_busy/span:.1f}%)  cloud_busy={sm.cloud_busy:.1f} "
+              f"({100*sm.cloud_busy/(span*c.K):.1f}% of {c.K} clouds)")
+        for k, (n, g, tsum) in sm.stats.items():
+            if n:
+                print(f"    {k:<7} tasks={n:6d} mean_group={g/n:8.2f} busy={tsum:10.1f}")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "--detail":
+        detail(sys.argv[3:], sys.argv[2])
+    else:
+        main()
