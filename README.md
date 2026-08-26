@@ -127,6 +127,7 @@ single request), and a worst-case `R=2000` run.
 ```
 python3 tests/sim.py bench/v1 ./sched      # A/B any two builds
 python3 tests/sim.py --detail tp-sat-K8 ./sched   # per-task-type breakdown
+python3 tests/public_port_compare.py ./sched /tmp/public ./baseline
 python3 tests/lbcheck.py ./sched           # makespan vs resource lower bound
 python3 tests/sweep.py ./sched             # same, over a grid of shapes
 python3 tests/diag.py hilat-K16 ./sched    # idle-with-work per resource
