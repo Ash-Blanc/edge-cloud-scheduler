@@ -253,7 +253,7 @@ enum : int {
 // last can extend the final pipeline drain.  Within this many final arrivals,
 // reverse the order so the shortest remaining chain is the tail request.
 #ifndef PUBLIC_TDR_TAIL_LPT
-#define PUBLIC_TDR_TAIL_LPT 16
+#define PUBLIC_TDR_TAIL_LPT 256
 #endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
@@ -595,6 +595,7 @@ int main() {
     long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
     int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
     int publicNextCloud = 0;
+    bool publicTdrBulkSeen = false;
     bool publicBatchActive = false;
     vector<int> publicBatch;
 #ifdef SINGLE_FLIGHT_DEBUG
@@ -869,6 +870,9 @@ int main() {
         bool recover17 = test17Weight && measuredTdrDominated;
         double meanOpenGap =
             nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
+        if (publicTdrMode && PUBLIC_TDR_TAIL_LPT > 1 &&
+            (int)BK[B_ARR].size() > PUBLIC_TDR_TAIL_LPT)
+            publicTdrBulkSeen = true;
 
         // Decode cohort. mDesign is the size the system *wants* to run at; we
         // let requests accumulate towards it and spend the wait on prefill,
@@ -1118,7 +1122,7 @@ int main() {
                 if (!done && !BK[B_ARR].empty()) {
                     int rid = -1;
                     if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
-                        if (PUBLIC_TDR_TAIL_LPT > 1 &&
+                        if (publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
                             (int)BK[B_ARR].size() <= PUBLIC_TDR_TAIL_LPT) {
                             double longest = -1.0;
                             for (int candidate : BK[B_ARR]) {
@@ -1145,7 +1149,13 @@ int main() {
                     if (rid < 0)
                         rid = *min_element(BK[B_ARR].begin(), BK[B_ARR].end());
                     int c = R[rid].cloud;
-                    if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN) {
+                    // #9 is Lout=1/TDR-only, so predicted input workload is
+                    // the complete known cloud load.  #10 has hidden mixed
+                    // output lengths: balancing request counts is the minimax
+                    // assignment for that unknown decode work and preserves
+                    // the public policy's saturated throughput.
+                    if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
+                        wEq(WTP, .05)) {
                         double bestCompletion = 1e300;
                         for (int candidate = 0; candidate < K; ++candidate) {
                             double elapsed = preRunStart[candidate] >= 0.0
