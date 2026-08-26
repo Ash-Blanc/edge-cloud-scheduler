@@ -909,16 +909,15 @@ int main() {
         //
         // The static family gate is necessary but not sufficient. The table
         // must also predict a plan with g >= 2 whose pooled rate is strictly
-        // higher than serving that same cohort serially and whose member gap is
-        // strictly shorter than de3974's chosen cohort. Thus a merely high
-        // TPUB cannot change behavior.
+        // higher than serving that same cohort serially, proving that distinct
+        // resource phases can overlap. Thus a merely high TPUB cannot change
+        // behavior.
         bool pipeStagger = false;
         bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
         if (test22Family && !prefillWantsEdge && !tpotBound && DBASE > 0) {
             const int poolD =
                 (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
             const int hi = min(4096, max(1, M_EFF));
-            const double baseGap = gapPredict(mDesign);
             double peakPipeRate = 0.0;
             for (int m = 1;;) {
                 int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
@@ -933,27 +932,24 @@ int main() {
 
             double best = -1.0, bestSoft = -1e300;
             int bestM = mDesign, bestG = 1, softM = mDesign, softG = 1;
-            double bestRate = 0.0, bestGap = 0.0;
-            double softRate = 0.0, softGap = 0.0;
+            double bestRate = 0.0, softRate = 0.0;
             for (int m = 1;;) {
                 int g = min(ENSEMBLE_PIPE_GCAP, poolD / m);
                 if (g >= 2) {
-                    double rate = 0.0, gap = 0.0, soft = 0.0;
-                    double value = pipedObjective(m, g, exTdr, &rate, &gap, &soft);
+                    double rate = 0.0, soft = 0.0;
+                    double value = pipedObjective(m, g, exTdr, &rate, nullptr, &soft);
                     if (rate + 1e-12 >= THR_FLOOR * peakPipeRate) {
                         if (value >= best - 1e-12) {
                             best = max(best, value);
                             bestM = m;
                             bestG = g;
                             bestRate = rate;
-                            bestGap = gap;
                         }
                         if (soft > bestSoft) {
                             bestSoft = soft;
                             softM = m;
                             softG = g;
                             softRate = rate;
-                            softGap = gap;
                         }
                     }
                 }
@@ -965,15 +961,13 @@ int main() {
                     bestM = softM;
                     bestG = softG;
                     bestRate = softRate;
-                    bestGap = softGap;
                 }
                 // The selected table plan must show real overlap: its pooled
-                // rate beats serving the same m serially, and its member gap
-                // beats de3974's chosen serial cohort.
+                // rate beats serving the same m serially. This directly tests
+                // that edge/link/cloud phases can run in antiphase.
                 bool structuralGain =
                     bestRate > ((double)bestM / gapPredict(bestM)) *
-                                   (1.0 + ENSEMBLE_PIPE_GAIN) &&
-                    bestGap < baseGap * (1.0 - ENSEMBLE_PIPE_GAIN);
+                                   (1.0 + ENSEMBLE_PIPE_GAIN);
                 if (bestG >= 2 && structuralGain) {
                     mDesign = bestM;
                     pipeStagger = true;
