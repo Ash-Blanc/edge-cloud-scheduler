@@ -481,11 +481,13 @@ int main() {
     // Exact weights are the official discriminator; every other public arm
     // remains event-for-event identical to submission 387914886.
     const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
-    // Official #15/#18 are the exact-weight, TDR-only (no measured token-gap)
-    // modes.  Their input queue is already SJF, so a later shorter P PROC
+    // Official #15 is the exact-weight, TDR-only (no measured token-gap) mode.
+    // Its input queue is already SJF, so a later shorter P PROC
     // cannot arrive behind a longer one during the saturated drain; splitting
     // only adds another S to a request that has not completed.
-    const bool noGapTdrWeight = wEq(WTP, .45) || wEq(WTP, .58);
+    // Do not include #18's .58 mode: only 87 points remain there, so the same
+    // structural bet has an unfavorable risk/reward despite its zero TPOT.
+    const bool noGapTdrWeight = wEq(WTP, .45);
     const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
     // Official #22 is the unique high-throughput w_tp=.5 test (tp~36.7).
     // Other official .5 tests have tiny tp, so TPUB>=4 selects it without a
