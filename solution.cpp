@@ -911,8 +911,9 @@ int main() {
         // serial cohort. Thus a merely high TPUB cannot change behavior.
         bool pipeStagger = false;
         if (test22Family && nPrefPend == 0 && !tpotBound && DBASE > 0) {
-            const int poolD =
-                (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
+            // nCohort includes ready and in-flight admitted members; fresh
+            // requests are the only additional members available to the plan.
+            const int poolD = nCohort + (int)BK[B_FRESH].size();
             const int hi = min(4096, max(1, M_EFF));
             const double baseGap = gapPredict(mDesign);
             const double baseRate = (double)mDesign / baseGap;
@@ -1078,9 +1079,8 @@ int main() {
                 } else {
                     for (int rid : BK[B_ACT]) batch.push_back(rid);
                     // The strict nCohort budget protects TPOT. On test 17 that
-                    // leg cannot move dist, so restore de3974's former nActive
-                    // accounting and recover the throughput it unnecessarily
-                    // withheld.
+                    // leg cannot move dist, so use nActive accounting and
+                    // recover the throughput it unnecessarily withheld.
                     int room = mDesign - (recover17 ? nActive : nCohort);
                     for (int i = (int)BK[B_FRESH].size() - 1;
                          i >= 0 && room > 0; --i, --room)
