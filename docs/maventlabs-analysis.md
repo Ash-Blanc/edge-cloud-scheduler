@@ -69,6 +69,57 @@ and admission, shortest-prefill-first ordering, collision-aware placement and
 prefill splitting, decode-first cloud arbitration, and an exact
 `w_tp=1, w_c=0` single-flight guard for preliminary test 19.
 
+## Reproduction evidence
+
+The unmodified public source completed all three repository examples. It
+builds with ordinary `-Wall -Wextra`, but fails the strict `-Werror` build
+because `TimeTable::interp` declares unused `lo` and `hi` variables.
+
+The public binary also completed all 38 cases in our local simulator. Against
+an optimized `fcdc041` binary it scored 12558.6 versus 14596.4, a net loss of
+2037.8 points. It had the following isolated synthetic gains:
+
+```text
+case             w_tp  fcdc041  public   delta
+tp-sat-K8        1.00  833.828  861.671  +27.843
+tp-sat-K4        0.98  483.178  514.029  +30.851
+tp-burst-K2      0.80  196.190  219.562  +23.372
+bal-K4           0.50  295.249  303.124   +7.875
+bal-K1           0.50   52.990   84.648  +31.658
+bal-K8-cpu       0.45  268.048  282.820  +14.772
+tp-prefill-K1    1.00    8.805    8.867   +0.062
+edge-K1L1        0.50   12.072   60.082  +48.010
+edge-lout1       0.70  397.463  420.618  +23.155
+edge-1cloud-big  0.60   28.159   82.418  +54.259
+flat-sat-K4      0.60  399.953  433.701  +33.748
+longout-K4       0.55  149.013  203.104  +54.091
+bigin-K8         0.40  169.835  189.142  +19.307
+sat5-K8          0.80  483.353  494.689  +11.336
+sat6-K4          0.90  933.816  997.002  +63.186
+```
+
+Representative trace digests confirm that these are different event
+schedules, rather than scorer noise. On `sat6-K4`, `fcdc041` emitted 12173
+frames (`c3cc0af99231...`) and the public scheduler emitted 10470
+(`1c677c6e4898...`). The public scheduler also has severe counterexamples:
+on the latency-only case it falls from 291.6 to 0.0 points, and on the
+high-link-latency `slow16-K4` reconstruction it falls from 464.3 to 151.4.
+These generated cases are useful for understanding behavior, but are not
+evidence of any official-test gain or fingerprint.
+
+## Baseline verification
+
+Because no port was justified, `solution.cpp` is byte-identical to `fcdc041`;
+there are no target or non-target trace changes, and test 19's single-flight
+path is unchanged.
+
+- strict C++17 build with `-Wall -Wextra -Werror -pedantic`: pass
+- statement example exact diff: pass
+- full 38-case local suite: 14596.4, zero failures
+- full 38-case ASan/UBSan suite: 14596.4, zero failures and no findings
+- worst-case `stress-R2000`: 0.07 s scheduler CPU, below 0.10 s
+- threshold sweep: not applicable; no policy or threshold was added
+
 ## Port decision
 
 No policy mode is ported. A gate based only on an assumed test number, weight,
