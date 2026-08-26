@@ -121,3 +121,15 @@ The main risk is evidence quality: Maventlabs' official test-5 score is still
 unknown, and synthetic gains have previously failed to transfer. This is a
 single-test judge probe, not a merge recommendation. If it does not improve
 #5, revert this branch without combining it with another policy.
+
+## Verification
+
+- strict C++17 build with `-Wall -Wextra -Werror -pedantic`: pass
+- statement example exact diff: pass
+- full 38-case suite: 13619.1, zero failures; current main is 13574.8
+- ASan/UBSan full suite: 13619.1, zero failures and no findings
+- selected-lineage verifier: all 40 traces match, including the `wEq`
+  inside/outside boundary probes
+- non-`.80` cases: event-for-event identical to `854e490`
+- `.80` cases: event-for-event identical to compiled Maventlabs `sol.cpp`
+- optimized CPU: 0.05 s on `stress-R2000`, 0.02 s on target `sat5-K8`
