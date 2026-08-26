@@ -234,6 +234,21 @@ enum : int {
 #ifndef TDR_UNSPLIT_WTP
 #define TDR_UNSPLIT_WTP 0.15
 #endif
+// Component switches for the exact-WTP public TDR arm.  They are compile-time
+// knobs so each structural choice can be measured against the compiled public
+// source independently rather than accepted from an aggregate synthetic score.
+#ifndef PUBLIC_TDR_CHAIN_ORDER
+#define PUBLIC_TDR_CHAIN_ORDER 1
+#endif
+#ifndef PUBLIC_TDR_WORKLOAD_ASSIGN
+#define PUBLIC_TDR_WORKLOAD_ASSIGN 1
+#endif
+#ifndef PUBLIC_TDR_PROC_ORDER
+#define PUBLIC_TDR_PROC_ORDER 1
+#endif
+#ifndef PUBLIC_TDR_POST_ORDER
+#define PUBLIC_TDR_POST_ORDER 1
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -654,7 +669,8 @@ int main() {
                 // FIFO input link.  Its two transfers therefore belong in the
                 // remaining-chain key, not just the three compute stages.
                 double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
-                if (publicTdrMode) w += 2.0 * xfer(r.lin);
+                if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER)
+                    w += 2.0 * xfer(r.lin);
                 qArr.push(PDI(w, (int)rid));
             } else if (e0 == 'F') {  // FIN rid
                 long long rid = 0;
@@ -1070,7 +1086,7 @@ int main() {
 
                 if (!done && !BK[B_PPOST].empty()) {
                     int rid = *min_element(BK[B_PPOST].begin(), BK[B_PPOST].end());
-                    if (publicTdrMode) {
+                    if (publicTdrMode && PUBLIC_TDR_POST_ORDER) {
                         rid = BK[B_PPOST][0];
                         for (int candidate : BK[B_PPOST])
                             if (tPpost.get(R[candidate].lin) <
@@ -1095,7 +1111,7 @@ int main() {
 
                 if (!done && !BK[B_ARR].empty()) {
                     int rid = -1;
-                    if (publicTdrMode) {
+                    if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
                         while (!qArr.empty()) {
                             int candidate = qArr.top().second;
                             qArr.pop();
@@ -1108,7 +1124,7 @@ int main() {
                     if (rid < 0)
                         rid = *min_element(BK[B_ARR].begin(), BK[B_ARR].end());
                     int c = R[rid].cloud;
-                    if (publicTdrMode) {
+                    if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN) {
                         double bestCompletion = 1e300;
                         for (int candidate = 0; candidate < K; ++candidate) {
                             double elapsed = preRunStart[candidate] >= 0.0
@@ -1123,6 +1139,10 @@ int main() {
                                 c = candidate;
                             }
                         }
+                        R[rid].cloud = c;
+                    } else if (publicTdrMode) {
+                        c = publicNextCloud;
+                        publicNextCloud = (publicNextCloud + 1) % K;
                         R[rid].cloud = c;
                     }
                     as("E P PRE ");
@@ -1194,7 +1214,7 @@ int main() {
                 if (!cloudFree[c]) continue;
                 if (!BK[B_PPROC + c].empty()) {
                     int rid = -1;
-                    if (publicTdrMode) {
+                    if (publicTdrMode && PUBLIC_TDR_PROC_ORDER) {
                         while (!qProc[c].empty()) {
                             int candidate = qProc[c].top().second;
                             qProc[c].pop();
