@@ -47,6 +47,12 @@ Two consequences of the definitions drive the design:
 
 ## Strategy
 
+- **Guarded public-policy port for `w_tp=0.80/0.90`.** Those weights uniquely
+  identify preliminary tests #5/#6. Only there, dispatch follows submission
+  387914886's one-batch-in-flight policy: round-robin cloud placement, complete
+  decode-batch barriers through `D POST`, input-first arbitration otherwise,
+  unsplit input processing, and decode prefix size chosen by edge-plus-cloud
+  time per member. All other weights stay on the baseline path.
 - **Cohort sizing.** Predict round time for a candidate cohort (edge pre/post,
   both link hops, cloud proc), evaluate the judge's objective over candidate
   sizes, take the best. A cohort grows only when the objective says the larger
