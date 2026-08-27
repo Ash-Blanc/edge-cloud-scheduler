@@ -212,6 +212,21 @@ ST_FIN
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
+#ifndef AKD8_FULLBATCH
+#define AKD8_FULLBATCH 0
+#endif
+#ifndef AKD8_TPBATCH
+#define AKD8_TPBATCH 0
+#endif
+#ifndef AKD8_WAITALL
+#define AKD8_WAITALL 0
+#endif
+#ifndef AKD8_INTERLEAVE
+#define AKD8_INTERLEAVE 0
+#endif
+#ifndef AKD8_PPROC_SPT
+#define AKD8_PPROC_SPT 0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -386,6 +401,11 @@ wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
+const bool akd8Full = AKD8_FULLBATCH && wEq(WTP, .25);
+const bool akd8TpBatch = AKD8_TPBATCH && wEq(WTP, .25);
+const bool akd8WaitAll = AKD8_WAITALL && wEq(WTP, .25);
+const bool akd8Interleave = AKD8_INTERLEAVE && wEq(WTP, .25);
+const bool akd8PprocSpt = AKD8_PPROC_SPT && wEq(WTP, .25);
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
 const bool test22Scale =
@@ -995,7 +1015,10 @@ done = true;
 }
 if (!done && !throughputPriority && batchReady)
 dispatchPublicPost();
-if (!done && !BK[B_ARR].empty()) {
+const bool akd8DecodeReady = akd8Interleave && !publicBatchActive &&
+(!BK[B_FRESH].empty() || !BK[B_ACT].empty()) &&
+!(akd8WaitAll && nPrefPend > 0);
+if (!done && !akd8DecodeReady && !BK[B_ARR].empty()) {
 int rid = -1;
 if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
 if (publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
@@ -1061,27 +1084,46 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && !publicBatchActive) {
+if (!done && !publicBatchActive &&
+!(akd8WaitAll && nPrefPend > 0)) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
 sort(batch.begin(), batch.end());
 if (!batch.empty()) {
-int best = 1;
-double bestEfficiency = 1e100;
+int best = (int)batch.size();
+if (!akd8Full) {
+int bestN = 1;
+double bestScore = akd8TpBatch ? -1.0 : 1e100;
 vector<int> perCloud(K, 0);
+int kUsed = 0;
+double bytes = 0.0;
 for (int n = 1; n <= (int)batch.size(); ++n) {
-perCloud[R[batch[n - 1]].cloud]++;
+int c = R[batch[n - 1]].cloud;
+if (!perCloud[c]) kUsed++;
+perCloud[c]++;
+bytes += (double)R[batch[n - 1]].lin;
 double proc = 0.0;
-for (int c = 0; c < K; ++c)
-if (perCloud[c])
-proc = max(proc, tDproc.get(perCloud[c]));
-double cost = tDpre.get(n) + proc + tDpost.get(n);
-double efficiency = cost / n;
-if (efficiency < bestEfficiency) {
-bestEfficiency = efficiency;
-best = n;
+for (int cc = 0; cc < K; ++cc)
+if (perCloud[cc])
+proc = max(proc, tDproc.get(perCloud[cc]));
+double edge = tDpre.get(n) + proc + tDpost.get(n);
+if (akd8TpBatch) {
+double link = 2.0 * (kUsed * LAT + 8.0 * bytes * BPT / (BW * 1e6));
+double rate = (double)n / max(1e-12, edge + link);
+if (rate > bestScore) {
+bestScore = rate;
+bestN = n;
 }
+} else {
+double efficiency = edge / n;
+if (efficiency < bestScore) {
+bestScore = efficiency;
+bestN = n;
+}
+}
+}
+best = bestN;
 }
 batch.resize(best);
 as("E D PRE -1 ");
@@ -1112,7 +1154,7 @@ for (int c = 0; c < K; ++c) {
 if (!cloudFree[c]) continue;
 if (!BK[B_PPROC + c].empty()) {
 int rid = -1;
-if (publicTdrMode && PUBLIC_TDR_PROC_ORDER) {
+if ((publicTdrMode && PUBLIC_TDR_PROC_ORDER) || akd8PprocSpt) {
 while (!qProc[c].empty()) {
 int candidate = qProc[c].top().second;
 qProc[c].pop();
