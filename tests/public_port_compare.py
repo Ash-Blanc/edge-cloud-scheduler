@@ -77,6 +77,11 @@ def main():
         elif public_weight(case.wtp) and abs(case.wtp - 0.05) > 1e-6 and abs(case.wtp - 0.15) > 1e-6:
             reference = public
             lineage = "public"
+        elif abs(case.wtp - 0.05) <= 1e-6 or abs(case.wtp - 0.15) <= 1e-6:
+            # Tail-LPT drop is live only on huge .05/.15 backlogs. Do not
+            # require identity with current-main; still print TARGET-DIFF.
+            reference = current_main
+            lineage = "tdr-arm"
         elif abs(case.wtp - 0.5) <= 1e-6 and case.name != "official22-pipeline":
             # Local .5 cases may newly take the relaxed TPUB gate. Official #22
             # reconstruction must still match current-main's antiphase arm.
@@ -93,19 +98,26 @@ def main():
                 expected_metrics == actual_metrics
                 and expected_trace == actual_trace
             )
-            failures += not match
-            print(
-                f"{case.name:<24} wtp={case.wtp:.8f} {lineage:<6} "
-                f"{'MATCH' if match else 'MISMATCH'} "
-                f"frames={actual_trace[1]} sha256={actual_trace[0][:12]}"
-            )
-            if not match:
+            if lineage == "tdr-arm":
                 print(
-                    f"  expected metrics={expected_metrics} trace={expected_trace}"
+                    f"{case.name:<24} wtp={case.wtp:.8f} {lineage:<6} "
+                    f"{'TARGET-DIFF' if not match else 'target-same'} "
+                    f"frames={actual_trace[1]} sha256={actual_trace[0][:12]}"
                 )
+            else:
+                failures += not match
                 print(
-                    f"  actual   metrics={actual_metrics} trace={actual_trace}"
+                    f"{case.name:<24} wtp={case.wtp:.8f} {lineage:<6} "
+                    f"{'MATCH' if match else 'MISMATCH'} "
+                    f"frames={actual_trace[1]} sha256={actual_trace[0][:12]}"
                 )
+                if not match:
+                    print(
+                        f"  expected metrics={expected_metrics} trace={expected_trace}"
+                    )
+                    print(
+                        f"  actual   metrics={actual_metrics} trace={actual_trace}"
+                    )
         else:
             print(
                 f"{case.name:<24} wtp={case.wtp:.8f} {lineage:<6} "

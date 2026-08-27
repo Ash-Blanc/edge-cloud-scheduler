@@ -119,3 +119,25 @@ The fitted #4 already satisfied (1)+(2)+(3) locally and official still no-op'd. 
 - Expected official move: **#9 / #10 only**. Local translation ~**+6 pts** on TDR-dominated #10-like backlogs (last-256 LPT hedge was ~2% extra mean TDR vs pure SPT). **Possibly also official no-op** if official #9/#10 never take the last-256 LPT path (queue never > 1024, or tail already SPT).
 - Honest: small expected delta. Do not soup. Do not pair. Do not re-enable k-shrink.
 - If any non-#9/#10 test moves, revert to main blob `3317974884a412f8ab0deb84f544e77e89149ffa`.
+
+Local proof (tail-LPT vs `d202b1a`):
+
+- `tests/tdr_trace_compare.py`: non-target weights **IDENTICAL**; `tail-lpt-R2000-w.05` and `stress-lat-R2000` **TARGET-DIFF**. `sat5`/`sat6` MATCH.
+- `tests/akd3_guard_compare.py`: #3 DBASE split, official5, #17, #22, `.80/.90` **MATCH**.
+- `tests/tdr_policy_compare.py`: mean TDR `0.388960x` vs AKD (was `0.397x` with last-256 LPT); worst tp `0.998869x`.
+- Score vs main on those 8 seeds: #9-like lout1 **0 pts** (nc already 0); #10-like mixed **+1.1 pts/seed**. Official #10 translation: ~2% TDR cut at nc=0.630 / dbase≈389 is **~+6 wait pts**. Honest: small, and official may still no-op.
+
+## #5/#6 prefill-feed research — no-gain, not shipped
+
+Official remaining ~534 (#5) + ~610 (#6) is ntp vs decode-only `tp_UB`. Official is prefill-bound (`k=K`). Tried gated `wEq(.80)||wEq(.90)` ideas that are not k-shrink, not D POST overlap, not maximal-ready, not pairing:
+
+| idea | sat5-K8 (prefill-bound, tp 0.048 ≠ official 1.121) | official5-K8-lat5 (tp 1.1208 ≈ official, not prefill-bound) |
+|---|---|---|
+| prefer P PRE over D POST when a cloud is hungry | IDENTICAL (dead) | IDENTICAL |
+| JSQ-by-remaining P PROC at P PRE | **+10.7** ntp 0.378→0.391, nc held | **−0.24** ntp 0.320→0.319 |
+| P PROC LPT | −2.3, nc drop | IDENTICAL |
+| P PRE LPT | −2.5, nc drop | −3.4, nc drop |
+
+Gate proved: retarget sat5 to `.75`/`.30` stays IDENTICAL.
+
+No candidate both (a) matches official #5 tp/tdr/tpot within ~1%, (b) is prefill-bound (`kuse=K`), (c) differs from `d202b1a`, and (d) wins without nc collapse. The sat5 JSQ win is the wrong shape (tp 20× too small). Do not ship tiny/wrong-shape wins. Do not soup into the tail-LPT submit.
