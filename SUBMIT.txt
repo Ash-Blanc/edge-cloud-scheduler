@@ -1,9 +1,24 @@
-NO SUBMIT — #5/#6 streaming/fire/steer/partition no-gain
-=======================================================
+NO SUBMIT — #5 in-box recon fitted; new levers no-gain
+=====================================================
 
 Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
 Score 16041.088. Do not push main. Do not soup failed probes.
 solution.cpp unchanged (no PROBE).
+
+RECON FIT
+- #5 FITTED prefill-bound AND in-box: R=100 L_out=96 pproc=160 span=15
+  seed=711 lat=5. tp +1.7% tdr +1.6% tpot +2.0% need=10/8. Canonical
+  ranking recon (tests/akd56_new_lever_ab.py fitted5).
+- #6 NOT fitted. Default: tp+0.1 tdr+6.5 tpot+0.7 not-prefill. Closest
+  prefill: R130 L46 pp190 tdr +12%. Pareto only; do not rank on it.
+- pproc207 still disqualified (tdr +21%).
+
+NEW LEVERS on the in-box #5 (not BAN; gate proved):
+- HOLD/DRY/BIG admission: +0.0% tp, ≤+0.13 pts. Tiny.
+- FT1 first-token D PROC / CUT two-piece P PROC / AFTER post-first-token
+  D PROC prefer: 0 or loss.
+- COH L_out cohort lock (token-level, not two-wave): −38% tp. Kill.
+Do not ship. See docs/akd56-recon-fit.md.
 
 OFFICIAL NO-OPS / FLOORS (do not resubmit)
 - pairing .75 blob 0c00047f… LOST 16040.404. BAN.
@@ -15,15 +30,11 @@ OFFICIAL NO-OPS / FLOORS (do not resubmit)
 - #13 ntp on LAT-bound recon: pairing fake, SJF tiny.
 - #10 edge SPT floor. Do not chase #9 (same publicTdrMode floor).
 - #8 uplink SPT floor.
-- **#5/#6 streaming decode / fire-as-1 / DPRE_FIRST / STEER / DPROC_OL
-  (this round).** Prefill-bound pproc207: STREAM/FIRE1/DPRE_FIRST +0.2% tp;
-  SIZE1 −96%; STEER IDENTICAL; DPROC_OL tpot-only; STEER+DPRE_FIRST −4.6%.
-  PART2 +26% tp is the banned two-wave family (official #5−9.6 #6−15).
-  Gate proved. Do not ship. See docs/akd56-stream-negative.md.
+- #5/#6 STREAM/FIRE1/DPRE_FIRST/STEER/DPROC_OL/PART2 (prior round).
+- **#5/#6 HOLD/DRY/BIG/FT1/CUT/AFTER/COH (this round)** on a fully matched
+  prefill-bound recon. Tiny, identical, or COH −38% tp.
 
 16.8k BLOCKED. Need ~759 (16800−16041). Closed floors cannot supply it.
 #5+#6 remaining ~534+#610 is ntp vs decode-only tp_UB. Official is
-prefill-bound (k=K). Every official-binding probe this round either no-op'd,
-lost, was tiny, or only won as after-prefill two-wave pipelining (BAN).
-No candidate is simultaneously prefill-bound, official tp/tdr/tpot-matched
-within a few %, trace-different, and a large ntp win.
+prefill-bound (k=K). #5 ranking recon is now in-box; every original lever
+on it this round was tiny, dead, or a token-loop loss.
