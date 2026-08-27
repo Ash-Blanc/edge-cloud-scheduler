@@ -377,7 +377,8 @@ io::rdbl(TPBASE);
 io::rdbl(DBASE);
 io::rdbl(WTP);
 io::rdbl(WC);
-const bool maximalReadyDecode = wEq(WTP, .80);
+const bool maximalReadyDecode =
+wEq(WTP, .80) || (wEq(WTP, .90) && K <= 4);
 const bool publicMode = (wEq(WTP, 0.0) && DBASE < 2.0) ||
 wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
