@@ -212,6 +212,12 @@ ST_FIN
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
+#ifndef AKD56_CLOUDTAIL
+#define AKD56_CLOUDTAIL 0
+#endif
+#ifndef AKD56_CLOUDPRE
+#define AKD56_CLOUDPRE 0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -484,6 +490,13 @@ int publicNextCloud = 0;
 bool publicTdrBulkSeen = false;
 bool publicBatchActive = false;
 vector<int> publicBatch;
+#if AKD56_CLOUDTAIL || AKD56_CLOUDPRE
+const bool cloudTailGate = wEq(WTP, .80) || wEq(WTP, .90);
+bool cloudTailLive = false;
+int cloudTailRR = 0;
+vector<vector<int>> cloudBat(K);
+vector<char> cloudBatOn(K, 0);
+#endif
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
 auto reportSingleFlightDebug = [&]() {
@@ -944,6 +957,132 @@ ANS.clear();
 if (publicMode) {
 if (edgeFree) {
 bool done = false;
+#if AKD56_CLOUDTAIL || AKD56_CLOUDPRE
+if (cloudTailGate) {
+if (!cloudTailLive && nPrefPend == 0 && BK[B_ARR].empty() &&
+BK[B_PPOST].empty() && !publicBatchActive) {
+bool anyP = false;
+for (int c = 0; c < K; ++c)
+if (!BK[B_PPROC + c].empty()) { anyP = true; break; }
+if (!anyP) cloudTailLive = true;
+}
+}
+if (cloudTailLive && !done) {
+auto emitCloudPre = [&](int c, vector<int>& grp) {
+as("E D PRE -1 ");
+ai((long long)grp.size());
+for (int rid : grp) {
+ac(' ');
+ai(rid);
+if (!R[rid].joined) {
+R[rid].joined = 1;
+nCohort++;
+nJoinC[R[rid].cloud]++;
+}
+nDecPend[R[rid].cloud]++;
+setSt(rid, ST_DPRE_RUN);
+bmove(rid, -1);
+}
+ac('\n');
+cloudBat[c] = grp;
+cloudBatOn[c] = 1;
+nDecFlight += (int)grp.size();
+edgeFree = false;
+running++;
+nAssigned++;
+done = true;
+};
+auto emitCloudPost = [&](const vector<int>& grp) {
+as("E D POST -1 ");
+ai((long long)grp.size());
+for (int rid : grp) {
+ac(' ');
+ai(rid);
+setSt(rid, ST_DPOST_RUN);
+bmove(rid, -1);
+}
+ac('\n');
+edgeFree = false;
+running++;
+nAssigned++;
+done = true;
+};
+#if AKD56_CLOUDTAIL
+int postC = -1;
+for (int i = 0; i < K; ++i) {
+int c = (cloudTailRR + i) % K;
+if (!cloudBatOn[c] || cloudBat[c].empty()) continue;
+bool ok = true;
+for (int rid : cloudBat[c])
+if (R[rid].st != ST_DPOST_READY) { ok = false; break; }
+if (ok) { postC = c; break; }
+}
+if (postC >= 0) {
+emitCloudPost(cloudBat[postC]);
+cloudBat[postC].clear();
+cloudBatOn[postC] = 0;
+cloudTailRR = (postC + 1) % K;
+} else {
+for (int i = 0; i < K && !done; ++i) {
+int c = (cloudTailRR + i) % K;
+if (cloudBatOn[c]) continue;
+batch.clear();
+for (int rid : BK[B_FRESH])
+if (R[rid].cloud == c) batch.push_back(rid);
+for (int rid : BK[B_ACT])
+if (R[rid].cloud == c) batch.push_back(rid);
+if (batch.empty()) continue;
+sort(batch.begin(), batch.end());
+emitCloudPre(c, batch);
+cloudTailRR = (c + 1) % K;
+}
+}
+#else
+bool waitingPre = false, allReady = true, anyOn = false;
+vector<int> postAll;
+for (int c = 0; c < K; ++c) {
+if (cloudBatOn[c]) {
+anyOn = true;
+bool ok = !cloudBat[c].empty();
+for (int rid : cloudBat[c])
+if (R[rid].st != ST_DPOST_READY) ok = false;
+if (!ok) allReady = false;
+else for (int rid : cloudBat[c]) postAll.push_back(rid);
+} else {
+bool has = false;
+for (int rid : BK[B_FRESH])
+if (R[rid].cloud == c) { has = true; break; }
+if (!has)
+for (int rid : BK[B_ACT])
+if (R[rid].cloud == c) { has = true; break; }
+if (has) { waitingPre = true; allReady = false; }
+}
+}
+if (anyOn && allReady && !waitingPre) {
+sort(postAll.begin(), postAll.end());
+emitCloudPost(postAll);
+for (int c = 0; c < K; ++c) {
+cloudBat[c].clear();
+cloudBatOn[c] = 0;
+}
+} else {
+for (int i = 0; i < K && !done; ++i) {
+int c = (cloudTailRR + i) % K;
+if (cloudBatOn[c]) continue;
+batch.clear();
+for (int rid : BK[B_FRESH])
+if (R[rid].cloud == c) batch.push_back(rid);
+for (int rid : BK[B_ACT])
+if (R[rid].cloud == c) batch.push_back(rid);
+if (batch.empty()) continue;
+sort(batch.begin(), batch.end());
+emitCloudPre(c, batch);
+cloudTailRR = (c + 1) % K;
+}
+}
+#endif
+}
+#endif
 bool batchReady = publicBatchActive;
 if (batchReady) {
 for (int rid : publicBatch) {
@@ -1061,7 +1200,11 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && !publicBatchActive) {
+if (!done && !publicBatchActive
+#if AKD56_CLOUDTAIL || AKD56_CLOUDPRE
+&& !cloudTailLive
+#endif
+) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
