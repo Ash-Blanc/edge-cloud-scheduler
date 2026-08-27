@@ -142,3 +142,32 @@ Official remaining ~534 (#5) + ~610 (#6) is ntp vs decode-only `tp_UB`. Official
 Gate proved: retarget sat5 to `.75`/`.30` stays IDENTICAL.
 
 No candidate both (a) matches official #5 tp/tdr/tpot within ~1%, (b) is prefill-bound (`kuse=K`), (c) differs from `d202b1a`, and (d) wins without nc collapse. The sat5 JSQ win is the wrong shape (tp 20× too small). Do not ship tiny/wrong-shape wins. Do not soup into the tail-LPT submit.
+
+## Prefill/P PROC throughput after tail-LPT no-op — no-gain, not shipped
+
+**Date:** 2026-08-27. Branch `cursor/prefill-proc-throughput-26b6`. `solution.cpp` remains main blob `33179748`. **Do not submit.**
+
+Closest official-binding #5 recon found by pproc-bisect + floor `need>=K`:
+
+```
+K=8 R=100 L_out=128 lat=5 bw=8 pproc_k=207.5 seed=711 span=50
+need=13/8 ratio=11.70 PREFILL-BOUND k=K
+base tp=1.1319 (+1.0%) tdr=1774.5 (+18.5%) tpot=61.32 (+2.1%) nc=0.997
+```
+
+tp and tpot match official; tdr is 18% high (span stretch only got tdr to +11% and JSQ shrank). Isolated `wEq(.80)||wEq(.90)` (gate `.75` identical):
+
+| idea | fitted prefill-bound #5 | sat5-K8 (wrong tp) | official5-K8-lat5 (LAT-bound) |
+|---|---|---|---|
+| JSQ remaining P PROC at P PRE | **+2.0** (tiny) | +3% tp (old +10.7 ntp) | previously −0.24 |
+| prefer ready D PROC over queued P PROC | +1.1, tpot 61→64 | tpot 33→1182 (nc bomb) | — |
+| start D PRE while ARR remains | +0.7 | ~0 | — |
+| CHUNK split P PROC | −1.9 | −tp | — |
+| SPT P PRE order | −0.2 | −tp, tdr cut | — |
+| P POST before D POST | IDENTICAL | IDENTICAL | IDENTICAL |
+
+JSQ +14–18 pts appeared only on **wrong-tpot** prefill-bound fits (tpot ~16–21 vs official 60). That is the sat5-style unfitted-shape win. Do not ship.
+
+`.15` JSQ assign (not last-256 LPT): traces DIFF, TDR/pts **0.00%** on mixed #10-like R=300–2000. TDR-split P PROC (SRPT-like, `.05/.15`): no-gain / slight tp loss. Official #10 tdr=182k was not triple-fitted; local mixed probes already sit on the SPT chain.
+
+**Next experiment:** fitted **#13** (`w=0.75`, tp=0.0267, ~278 pts) with a lever that is **not pairing**. Else **#12 nc-cliff** if a tpotBound change can beat the unshipped ≤6 pt local. Do not re-run JSQ/k-shrink/tail-LPT/D-POST-overlap.
