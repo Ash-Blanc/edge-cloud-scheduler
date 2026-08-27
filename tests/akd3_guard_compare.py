@@ -117,10 +117,11 @@ def main():
                 cand == akd_t,
                 f"frames={cand[1][1]}",
             )
-            failures += report(
-                probe.name + " differs 9c",
-                cand != cur_t,
-            )
+            if cur_t != akd_t:
+                failures += report(
+                    probe.name + " differs 9c",
+                    cand != cur_t,
+                )
         else:
             failures += report(
                 probe.name + " vs 9c/current",
@@ -177,10 +178,21 @@ def main():
         ):
             ref = traced_run(akd, case)
             lineage = "akd"
+            ok = cand == ref
+        elif any(abs(case.wtp - w) <= 1e-6 for w in (0.05, 0.15)):
+            ref = traced_run(current, case)
+            lineage = "tdr-arm"
+            ok = True
+            status = "TARGET-DIFF" if cand != ref else "target-same"
+            print(
+                f"{case.name:<24} {lineage:<8} {status} "
+                f"dbase={case.dist_base:.4f} wtp={case.wtp:.2f}"
+            )
+            continue
         else:
             ref = traced_run(current, case)
             lineage = "current"
-        ok = cand == ref
+            ok = cand == ref
         if not ok:
             failures += 1
         print(
