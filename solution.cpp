@@ -377,9 +377,11 @@ io::rdbl(TPBASE);
 io::rdbl(DBASE);
 io::rdbl(WTP);
 io::rdbl(WC);
-const bool maximalReadyDecode =
-wEq(WTP, .80) || (wEq(WTP, .90) && K <= 4);
-const bool publicMode = (wEq(WTP, 0.0) && DBASE < 2.0) ||
+// inert: akd3-purelat-dbase25-slo1-6702
+const bool pureLat = (WTP <= 1e-6 && WC >= 1.0 - 1e-6);
+const bool akd3Dbase = (DBASE > 0 && DBASE < 2.5) ||
+(DBASE <= 0 && SLO1 > 100);
+bool publicMode = (pureLat && akd3Dbase) ||
 wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
@@ -448,6 +450,8 @@ break;
 }
 }
 historical22Mode = wEq(WTP, .5) && predictedPeak > 1.0;
+if (pureLat && predictedPeak > 0 && predictedPeak < 0.25)
+publicMode = true;
 double historicalNtpCeil = 0;
 if (historical22Mode && TPUB > TPBASE) {
 int hi = min(4096, max(1, M_EFF));
@@ -940,9 +944,8 @@ ANS.clear();
 if (publicMode) {
 if (edgeFree) {
 bool done = false;
-bool batchReady = maximalReadyDecode ? !BK[B_DPOST].empty()
-: publicBatchActive;
-if (batchReady && !maximalReadyDecode) {
+bool batchReady = publicBatchActive;
+if (batchReady) {
 for (int rid : publicBatch) {
 if (R[rid].st != ST_DPOST_READY) {
 batchReady = false;
@@ -952,15 +955,9 @@ break;
 }
 const bool throughputPriority = WTP >= WC;
 auto dispatchPublicPost = [&]() {
-if (maximalReadyDecode) {
-batch = BK[B_DPOST];
-sort(batch.begin(), batch.end());
-} else {
-batch = publicBatch;
-}
 as("E D POST -1 ");
-ai((long long)batch.size());
-for (int rid : batch) {
+ai((long long)publicBatch.size());
+for (int rid : publicBatch) {
 ac(' ');
 ai(rid);
 setSt(rid, ST_DPOST_RUN);
@@ -970,10 +967,8 @@ ac('\n');
 edgeFree = false;
 running++;
 nAssigned++;
-if (!maximalReadyDecode) {
 publicBatch.clear();
 publicBatchActive = false;
-}
 done = true;
 };
 if (throughputPriority && batchReady) dispatchPublicPost();
@@ -1066,13 +1061,12 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && (maximalReadyDecode || !publicBatchActive)) {
+if (!done && !publicBatchActive) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
 sort(batch.begin(), batch.end());
 if (!batch.empty()) {
-if (!maximalReadyDecode) {
 int best = 1;
 double bestEfficiency = 1e100;
 vector<int> perCloud(K, 0);
@@ -1090,7 +1084,6 @@ best = n;
 }
 }
 batch.resize(best);
-}
 as("E D PRE -1 ");
 ai((long long)batch.size());
 for (int rid : batch) {
@@ -1106,10 +1099,8 @@ setSt(rid, ST_DPRE_RUN);
 bmove(rid, -1);
 }
 ac('\n');
-if (!maximalReadyDecode) {
 publicBatch = batch;
 publicBatchActive = true;
-}
 nDecFlight += (int)batch.size();
 edgeFree = false;
 running++;

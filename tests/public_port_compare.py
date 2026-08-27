@@ -2,7 +2,8 @@
 """Prove the best-of-official public port and its negative guard.
 
 At the eight selected weights (matched with 1e-6, matching the scheduler's
-wEq), the candidate must reproduce submission 387914886. On WTP=1, 0.67 and 0
+wEq), plus the pure-latency #3 arm (WTP=0, WC=1, DBASE<2.5), the candidate
+must reproduce submission 387914886. On WTP=1, 0.67 and WTP=0 with DBASE>=2.5
 it must reproduce the current-main binary. A reconstructed sat5 case at
 WTP=0.80 / 0.98 must match public AND differ from the pre-public baseline;
 otherwise public dispatch is dead.
@@ -19,7 +20,7 @@ from trace_compare import traced_run
 
 
 TARGETS = (0.30, 0.80, 0.90, 0.25, 0.05, 0.15, 0.75, 0.98)
-PROTECTED = (0.0, 0.67, 1.0)
+PROTECTED = (0.67, 1.0)
 
 
 def public_weight(weight):
@@ -28,6 +29,13 @@ def public_weight(weight):
 
 def protected_weight(weight):
     return any(abs(weight - target) <= 1e-6 for target in PROTECTED)
+
+
+def akd3_case(case):
+    pure = case.wtp <= 1e-6 and case.wc >= 1.0 - 1e-6
+    dbase = case.dist_base
+    dbase_hit = (dbase > 0 and dbase < 2.5) or (dbase <= 0 and case.slo1 > 100)
+    return pure and dbase_hit
 
 
 def main():
@@ -63,7 +71,7 @@ def main():
 
     failures = 0
     for case in cases:
-        if public_weight(case.wtp):
+        if public_weight(case.wtp) or akd3_case(case):
             reference = public
             lineage = "public"
         elif abs(case.wtp - 0.5) <= 1e-6 and case.name != "official22-pipeline":
@@ -139,12 +147,19 @@ def main():
                 print("  ERROR: WTP public path matches baseline; publicMode is dead")
 
     # Protected weights must stay on current-main even if nearby public targets
-    # exist. test17 (0.67) is already in the loop; re-assert WTP=1 and 0.
-    for name, weight in (("tp-sat-K8", 1.0), ("lat-only-K4", 0.0), ("bk-tdr-K2", 0.67)):
+    # exist. test17 (0.67) is already in the loop; re-assert WTP=1.
+    # WTP=0 is public only when the #3 DBASE/SLO1 predicate fires.
+    for name, weight in (("tp-sat-K8", 1.0), ("bk-tdr-K2", 0.67)):
         case = next(c for c in cases if c.name == name)
         if not protected_weight(case.wtp) and abs(case.wtp - weight) > 1e-9:
             failures += 1
             print(f"  ERROR: {name} wtp={case.wtp} is not the protected {weight}")
+    lat0 = next(c for c in cases if c.name == "lat-only-K4")
+    if not akd3_case(lat0):
+        failures += 1
+        print(
+            f"  ERROR: lat-only-K4 dbase={lat0.dist_base} should take the #3 AKD arm"
+        )
 
     if failures:
         raise SystemExit(f"{failures} selected-lineage trace mismatch(es)")

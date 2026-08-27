@@ -16,6 +16,12 @@ def target(weight):
     return any(abs(weight - value) <= 1e-6 for value in TARGETS)
 
 
+def akd3_case(case):
+    pure = case.wtp <= 1e-6 and case.wc >= 1.0 - 1e-6
+    dbase = case.dist_base
+    return pure and ((dbase > 0 and dbase < 2.5) or (dbase <= 0 and case.slo1 > 100))
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: tdr_trace_compare.py BASE CANDIDATE")
@@ -37,7 +43,7 @@ def main():
         expected = traced_run(base, case)
         actual = traced_run(candidate, case)
         match = expected == actual
-        if target(case.wtp):
+        if target(case.wtp) or akd3_case(case):
             changed_targets += not match
             status = "TARGET-DIFF" if not match else "target-same"
         else:
