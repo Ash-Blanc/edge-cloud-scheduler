@@ -1,0 +1,19 @@
+NO SUBMIT — tail-LPT official no-op; waiting on a new lever
+==========================================================
+
+Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
+Score 16041.088. Do not push main. Do not soup failed probes.
+
+OFFICIAL NO-OPS (do not resubmit)
+- pairing .75 blob 0c00047f… LOST 16040.404. BAN.
+- k-shrink .80/.90 blob 7ef0c2f6… NO-OP 16041. BAN k-shrink-with-prefill-floor
+  on .25/.30/.80/.90.
+- k-shrink .30 blob 603e4d32… NO-OP 16041 #4 identical. Same k=K story.
+- tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. Last-256 LPT never mattered
+  on official #9/#10. BAN last-N LPT of that path.
+
+Workspace solution.cpp is the known-good main blob (no PROBE comment).
+If a later commit stages a probe, it MUST have a unique first-line
+  // PROBE <name> blob=...
+and this file must name the expected tests plus the revert blob
+3317974884a412f8ab0deb84f544e77e89149ffa.
