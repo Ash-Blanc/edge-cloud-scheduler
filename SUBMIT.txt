@@ -1,0 +1,39 @@
+ISOLATED A/B SUBMIT — #4 .30 k-shrink only
+==========================================
+
+PAIRING ABANDONED (do not submit pairing again)
+- Official A/B of the #13 pairing probe FAILED (16040.404 vs 16041.088).
+- BAN: pair-2-arrivals / same-cloud pairing at wEq(WTP,.75). Never re-enable.
+
+k-shrink .80/.90 OFFICIAL NO-OP (do not resubmit)
+- Submitted blob 7ef0c2f6c6048730c3156e70826a840b461cb5d6 at 5f4d787.
+- Score 16041.088, bit-identical to d202b1a on every test including:
+  #5: 465.593 tp=1.121008 tdr=1497.256 tpot=60.081 nc=0.998
+  #6: 389.543 tp=0.696236 tdr=3102.232 tpot=57.814 nc=0.992
+  #13: 722.457 (pairing not in that file)
+- Diagnosis: not the wrong file (hash ≠ main 33179748). Guard fired
+  (satTpMode / wEq 1e-6 / SAT_TP=1). Prefill floor ceil(cloudW/feedW*1.08)
+  kept k=K on prefill-heavy .80/.90; JSQ among K ≡ RR. High-LAT official5
+  recon that does shrink is NOT within ~1% of official #5 tdr/tpot, and
+  would have moved tp +19% if it were official (it did not).
+- Do not strip the floor. Do not ship another .80/.90 k-shrink A/B.
+
+THIS FILE
+- Isolated #4 .30 k-shrink from origin/cursor/akd48-recon-probe-26b6
+  SHA 3de2f525d27bbc414319a4511c4a9cfaae965e7c
+- Gated to exact w_tp ∈ {.30} only (AKD4_KSHRINK). Pairing/chain/.25/.80/.90
+  k-shrink compile-time OFF. No extra tail-LPT.
+- git hash-object solution.cpp = 603e4d32e76268219f8d3a798ce9af5448c838ac
+  Confirm: `git hash-object solution.cpp` must print that hash before submit.
+- Size 38894 < 60000.
+
+EXPECTED OFFICIAL MOVES
+- #4 ONLY (w_tp=.30). Local fitted #4: +32 pts, ntp 0.45→0.56, nc held, TDR unchanged.
+- #5 / #6 / #8 / #9 / #10 / #13 / #16 / #19 / #3 / #17 / #22 must stay identical
+  to the 16041 vector (main d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa).
+- If #4 drops or any other test moves: revert to main blob
+  3317974884a412f8ab0deb84f544e77e89149ffa. Do not ship.
+
+Confirm hash:
+  git hash-object solution.cpp
+  # expect: 603e4d32e76268219f8d3a798ce9af5448c838ac
