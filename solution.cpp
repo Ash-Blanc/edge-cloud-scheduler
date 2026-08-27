@@ -212,6 +212,27 @@ ST_FIN
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
+#ifndef AKD56_MIX
+#define AKD56_MIX 1
+#endif
+#ifndef AKD56_MIX_SJF
+#define AKD56_MIX_SJF 1
+#endif
+#ifndef AKD56_MIX_JSQ
+#define AKD56_MIX_JSQ 1
+#endif
+#ifndef AKD56_MIX_SORT
+#define AKD56_MIX_SORT 1
+#endif
+#ifndef AKD56_MIX_PRELOAD
+#define AKD56_MIX_PRELOAD 1
+#endif
+#ifndef AKD56_MIX_PPOST
+#define AKD56_MIX_PPOST 1
+#endif
+#ifndef AKD56_MIX_AFFINITY
+#define AKD56_MIX_AFFINITY 0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -386,6 +407,7 @@ wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
+const bool akd56Mix = AKD56_MIX && wEq(WTP, .80); // PROBE mixed-L_out pack .80 SJF+JSQ+sort+preload
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
 const bool test22Scale =
@@ -484,6 +506,7 @@ int publicNextCloud = 0;
 bool publicTdrBulkSeen = false;
 bool publicBatchActive = false;
 vector<int> publicBatch;
+int mixMaxLout = 64;
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
 auto reportSingleFlightDebug = [&]() {
@@ -543,7 +566,7 @@ r.last_tok = now;
 r.next_ls = 0;
 r.tokens = 0;
 r.joined = 0;
-if (publicMode && !publicTdrMode) {
+if (publicMode && !publicTdrMode && !(akd56Mix && AKD56_MIX_JSQ)) {
 r.cloud = publicNextCloud;
 publicNextCloud = (publicNextCloud + 1) % K;
 } else {
@@ -732,6 +755,8 @@ if (r.cloud >= 0) nJoinC[r.cloud]--;
 }
 r.st = ST_FIN;
 bmove(rid, -1);
+if (akd56Mix && r.tokens > 0)
+mixMaxLout = max(mixMaxLout, r.tokens);
 if (r.cloud >= 0) nDec[r.cloud]--;
 nLive--;
 }
@@ -958,6 +983,24 @@ const bool akd56Cap = wEq(WTP, .80); // PROBE 16063.4 mDesign-cap+skipP gated to
 const bool priorityDecodeReady =
 akd56Cap && throughputPriority &&
 ((int)BK[B_FRESH].size()+(int)BK[B_ACT].size() >= max(1,mDesign));
+auto mixRemOf = [&](const Req& r) -> int {
+if (r.st == ST_FIN || r.st == ST_ARR) return 0;
+if (r.st <= ST_PPOST_RUN) return mixMaxLout;
+return max(1, mixMaxLout - r.tokens);
+};
+auto mixLoadOf = [&](int c) -> double {
+double rem = 0;
+for (int rid = 0, n = (int)R.size(); rid < n; ++rid) {
+if (R[rid].cloud != c) continue;
+rem += mixRemOf(R[rid]);
+}
+if (AKD56_MIX_PRELOAD) {
+double elapsed = preRunStart[c] >= 0.0 ? now - preRunStart[c] : 0.0;
+double queued = max(0.0, preWork[c] - elapsed);
+rem += queued / max(roundT(max(1, mDesign)), 1e-9);
+}
+return rem;
+};
 auto dispatchPublicPost = [&]() {
 as("E D POST -1 ");
 ai((long long)publicBatch.size());
@@ -978,7 +1021,14 @@ done = true;
 if (throughputPriority && batchReady) dispatchPublicPost();
 if (!done && (!throughputPriority || !priorityDecodeReady) && !BK[B_PPOST].empty()) {
 int rid = *min_element(BK[B_PPOST].begin(), BK[B_PPOST].end());
-if (publicTdrMode && PUBLIC_TDR_POST_ORDER) {
+if (akd56Mix && AKD56_MIX_PPOST) {
+rid = BK[B_PPOST][0];
+for (int candidate : BK[B_PPOST]) {
+double a = tPpost.get(R[candidate].lin);
+double b = tPpost.get(R[rid].lin);
+if (a < b || (a == b && candidate < rid)) rid = candidate;
+}
+} else if (publicTdrMode && PUBLIC_TDR_POST_ORDER) {
 rid = BK[B_PPOST][0];
 for (int candidate : BK[B_PPOST])
 if (tPpost.get(R[candidate].lin) <
@@ -1001,7 +1051,29 @@ if (!done && !throughputPriority && batchReady)
 dispatchPublicPost();
 if (!done && (!throughputPriority || !priorityDecodeReady) && !BK[B_ARR].empty()) {
 int rid = -1;
-if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
+if (akd56Mix && AKD56_MIX_SJF) {
+if (AKD56_MIX_SJF >= 2) {
+double longest = -1.0;
+for (int candidate : BK[B_ARR]) {
+double chain = tPpre.get(R[candidate].lin) +
+tPproc.get(R[candidate].lin) +
+tPpost.get(R[candidate].lin);
+if (chain > longest || (chain == longest && candidate < rid)) {
+longest = chain;
+rid = candidate;
+}
+}
+} else {
+while (!qArr.empty()) {
+int candidate = qArr.top().second;
+qArr.pop();
+if (bid[candidate] == B_ARR) {
+rid = candidate;
+break;
+}
+}
+}
+} else if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
 if (publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
 (int)BK[B_ARR].size() <= PUBLIC_TDR_TAIL_LPT) {
 double longest = -1.0;
@@ -1029,7 +1101,26 @@ break;
 if (rid < 0)
 rid = *min_element(BK[B_ARR].begin(), BK[B_ARR].end());
 int c = R[rid].cloud;
-if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
+if (akd56Mix && AKD56_MIX_JSQ) {
+int bestC = 0;
+double bestLoad = 1e300;
+double myRem = (double)mixMaxLout;
+for (int i = 0; i < K; ++i) {
+double load = mixLoadOf(i);
+if (AKD56_MIX_AFFINITY) {
+int cnt = nPre[i] + nDec[i];
+double avg = cnt ? load / (double)cnt : myRem;
+load = fabs(avg - myRem) * 1024.0 + load;
+}
+if (load < bestLoad - 1e-12 ||
+(fabs(load - bestLoad) <= 1e-12 && i < bestC)) {
+bestLoad = load;
+bestC = i;
+}
+}
+c = bestC;
+R[rid].cloud = c;
+} else if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
 wEq(WTP, .05)) {
 double bestCompletion = 1e300;
 for (int candidate = 0; candidate < K; ++candidate) {
@@ -1069,7 +1160,17 @@ if (!done && !publicBatchActive) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
+if (akd56Mix && AKD56_MIX_SORT) {
+sort(batch.begin(), batch.end(), [&](int a, int b) {
+int ca = R[a].cloud, cb = R[b].cloud;
+int ra = R[a].tokens, rb = R[b].tokens;
+if (ca != cb) return ca < cb;
+if (ra != rb) return ra > rb;
+return a < b;
+});
+} else {
 sort(batch.begin(), batch.end());
+}
 if (!batch.empty()) {
 int best = 1;
 double bestEfficiency = 1e100;
@@ -1153,7 +1254,15 @@ continue;
 }
 if (BK[B_DPROC + c].empty()) continue;
 batch = BK[B_DPROC + c];
+if (akd56Mix && AKD56_MIX_SORT) {
+sort(batch.begin(), batch.end(), [&](int a, int b) {
+int ra = R[a].tokens, rb = R[b].tokens;
+if (ra != rb) return ra > rb;
+return a < b;
+});
+} else {
 sort(batch.begin(), batch.end());
+}
 as("C");
 ai(c);
 as(" D PROC ");
