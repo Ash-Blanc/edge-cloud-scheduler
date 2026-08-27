@@ -1,0 +1,44 @@
+ISOLATED A/B SUBMIT — tail-LPT drop on .05/.15 only
+==================================================
+
+FILE IDENTITY (grep on Codeforces source)
+  // PROBE tdr-tail-lpt-05-15 blob=e77e7e41d357e798024a0d137435d4031704fec2
+  git hash-object solution.cpp
+  # MUST print: d65f23abfeca15ee805c02c6cc88ca2d582eeb3f
+  Size 37007 < 60000.
+
+You uploaded the RIGHT file last time. Workspace blob was
+  603e4d32e76268219f8d3a798ce9af5448c838ac
+which is isolated #4 .30 k-shrink (AKD4_KSHRINK=1). That is why official
+#4 was bit-identical to d202b1a (795.878, tp=0.057134, tdr=474.025,
+tpot=83.419): k-shrink-with-prefill-floor is a no-op on official #4,
+same k=K story as .80/.90. BAN further official k-shrink A/B on
+.25/.30/.80/.90. See OFFICIAL_AB.md.
+
+PAIRING ABANDONED (do not submit pairing again)
+- Official A/B FAILED (16040.404 vs 16041.088). BAN wEq(WTP,.75) pairing.
+
+k-shrink .80/.90 AND .30 OFFICIAL NO-OP (do not resubmit)
+- .80/.90 blob 7ef0c2f6… score 16041.088, every test identical.
+- .30 blob 603e4d32… score 16041.088, #4 identical.
+
+THIS FILE
+- Restored known-good main blob 3317974884a412f8ab0deb84f544e77e89149ffa
+  then isolated tail-LPT from cursor/tdr-round-headroom-26b6 e9fe048:
+  PUBLIC_TDR_TAIL_LPT 256 → 1 so SPT runs through the last request on
+  exact w_tp ∈ {.05,.15} only. No k-shrink. No pairing. No extra soup.
+- First-line comment is grep-only (does not change dispatch).
+
+EXPECTED OFFICIAL MOVES
+- #9 and/or #10 ONLY (w_tp=.05 / .15). Local translation ~+6 pts on
+  TDR-dominated #10-like R=2000 backlogs. Possibly also official no-op
+  if those tests never enter the last-256 LPT hedge.
+- #3 / #4 / #5 / #6 / #8 / #13 / #14 / #15 / #16 / #17 / #18 / #19 / #22
+  must stay identical to the 16041 vector.
+- If any non-#9/#10 test moves: revert to main blob
+  3317974884a412f8ab0deb84f544e77e89149ffa. Do not ship.
+
+Confirm before submit:
+  grep -n "PROBE tdr-tail-lpt-05-15" solution.cpp
+  git hash-object solution.cpp
+  # expect: d65f23abfeca15ee805c02c6cc88ca2d582eeb3f

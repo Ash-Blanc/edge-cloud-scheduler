@@ -1,3 +1,4 @@
+// PROBE tdr-tail-lpt-05-15 blob=e77e7e41d357e798024a0d137435d4031704fec2
 #include <bits/stdc++.h>
 #include <unistd.h>
 using namespace std;
@@ -207,7 +208,7 @@ ST_FIN
 #define PUBLIC_TDR_POST_ORDER 1
 #endif
 #ifndef PUBLIC_TDR_TAIL_LPT
-#define PUBLIC_TDR_TAIL_LPT 256
+#define PUBLIC_TDR_TAIL_LPT 1
 #endif
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4

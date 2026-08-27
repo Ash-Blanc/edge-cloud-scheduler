@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import random
 import sys
 
 import sim
@@ -36,6 +37,20 @@ def main():
     protected58.name = "protected-wtp-0.58"
     protected58.wtp, protected58.wc = .58, .42
     cases.append(protected58)
+
+    # Tail-LPT only fires after a queue > 4*256; the stock suite never
+    # reaches that on .05/.15, so pin one official-scale backlog.
+    rng = random.Random(909)
+    lengths = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    tail = sim.Case(
+        8, 2.0, 20.0, 1.0, 32768, 8, 554.0, 94.754,
+        sim.make_table("edge", rng),
+        sorted((rng.uniform(0.0, 5.0), rng.choice(lengths), 1) for _ in range(2000)),
+        .05, .95,
+    )
+    tail.name = "tail-lpt-R2000-w.05"
+    tail.tp_base, tail.tp_ub, tail.dist_base = .001, .004515, 33.8
+    cases.append(tail)
 
     failures = 0
     changed_targets = 0
