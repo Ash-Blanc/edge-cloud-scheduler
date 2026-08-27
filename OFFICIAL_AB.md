@@ -78,5 +78,6 @@ Unconstrained k-shrink (strip the floor) is rejected: local K=4 #5 and #6 lose t
 - blob: `603e4d32e76268219f8d3a798ce9af5448c838ac`
 - Workspace branch: `cursor/k-shrink-30-official4-bbfc`
 - Gated to exact `wEq(WTP,.30)` (`AKD4_KSHRINK=1`). Pairing/chain/JSQ/`.25` k-shrink compile-time **0**. No `.75` pairing. No `.80/.90` k-shrink.
-- Fitted #4 recon (K=4, R=8, L_out=17, lat=12): local **+32 pts** (ntp 0.45→0.56, nc held, TDR unchanged).
+- Fitted #4 recon (K=4, R=8, L_out=17, lat=12): local **+32.16 pts** (ntp 0.451→0.558, nc 0.942 held, TDR 474.3 unchanged, clouds 4→2).
+- Local trace identity vs `d202b1a`: `.05/.15/.25/.75/.80/.90/.98/.99/1.0`, official5-K8-lat5, sat5-K8, sat6-K8, #3 (lat-only-K4), #17, #22 all **IDENTICAL**.
 - Expected official move: **#4 only**. If any other test moves, revert to main blob `3317974884a412f8ab0deb84f544e77e89149ffa`.
