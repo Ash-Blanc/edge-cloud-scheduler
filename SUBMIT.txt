@@ -1,0 +1,29 @@
+NO SUBMIT — #5/#6 streaming/fire/steer/partition no-gain
+=======================================================
+
+Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
+Score 16041.088. Do not push main. Do not soup failed probes.
+solution.cpp unchanged (no PROBE).
+
+OFFICIAL NO-OPS / FLOORS (do not resubmit)
+- pairing .75 blob 0c00047f… LOST 16040.404. BAN.
+- k-shrink .80/.90 blob 7ef0c2f6… NO-OP 16041. BAN k-shrink-with-prefill-floor
+  on .25/.30/.80/.90.
+- k-shrink .30 blob 603e4d32… NO-OP 16041 #4 identical. Same k=K story.
+- tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. BAN last-N LPT of that path.
+- #14 L_out=2 single-chain floor. #15/#17/#18 fitted floors. #12 tpotBound ≤6.
+- #13 ntp on LAT-bound recon: pairing fake, SJF tiny.
+- #10 edge SPT floor. Do not chase #9 (same publicTdrMode floor).
+- #8 uplink SPT floor.
+- **#5/#6 streaming decode / fire-as-1 / DPRE_FIRST / STEER / DPROC_OL
+  (this round).** Prefill-bound pproc207: STREAM/FIRE1/DPRE_FIRST +0.2% tp;
+  SIZE1 −96%; STEER IDENTICAL; DPROC_OL tpot-only; STEER+DPRE_FIRST −4.6%.
+  PART2 +26% tp is the banned two-wave family (official #5−9.6 #6−15).
+  Gate proved. Do not ship. See docs/akd56-stream-negative.md.
+
+16.8k BLOCKED. Need ~759 (16800−16041). Closed floors cannot supply it.
+#5+#6 remaining ~534+#610 is ntp vs decode-only tp_UB. Official is
+prefill-bound (k=K). Every official-binding probe this round either no-op'd,
+lost, was tiny, or only won as after-prefill two-wave pipelining (BAN).
+No candidate is simultaneously prefill-bound, official tp/tdr/tpot-matched
+within a few %, trace-different, and a large ntp win.
