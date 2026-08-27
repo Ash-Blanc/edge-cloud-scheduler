@@ -954,8 +954,9 @@ break;
 }
 }
 const bool throughputPriority = WTP >= WC;
+const bool akd56Cap = wEq(WTP, .80); // PROBE 16063.4 mDesign-cap+skipP gated to .80 only
 const bool priorityDecodeReady =
-throughputPriority &&
+akd56Cap && throughputPriority &&
 ((int)BK[B_FRESH].size()+(int)BK[B_ACT].size() >= max(1,mDesign));
 auto dispatchPublicPost = [&]() {
 as("E D POST -1 ");
@@ -1086,7 +1087,7 @@ bestEfficiency = efficiency;
 best = n;
 }
 }
-if (throughputPriority) best = min((int)batch.size(), max(1, mDesign));
+if (akd56Cap && throughputPriority) best = min((int)batch.size(), max(1, mDesign));
 batch.resize(best);
 as("E D PRE -1 ");
 ai((long long)batch.size());
