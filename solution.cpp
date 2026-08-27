@@ -174,10 +174,13 @@ ST_FIN
 #define TPOT_DIST_SHARE 0.3
 #endif
 #ifndef ENSEMBLE_PIPE_TPUB_MIN
-#define ENSEMBLE_PIPE_TPUB_MIN 20.0
+#define ENSEMBLE_PIPE_TPUB_MIN 4.0
 #endif
 #ifndef ENSEMBLE_PIPE_GCAP
 #define ENSEMBLE_PIPE_GCAP 8
+#endif
+#ifndef ENSEMBLE_PIPE_GAIN
+#define ENSEMBLE_PIPE_GAIN 0.05
 #endif
 #ifndef PREFILL_WORKLOAD_WTP
 #define PREFILL_WORKLOAD_WTP 0.05
@@ -366,12 +369,11 @@ io::rdbl(WC);
 const bool publicMode = wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
-const bool publicPipeDecode = wEq(WTP, .80) || wEq(WTP, .90);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
-const bool test22Scale = wEq(WTP, .5) && TPUB >= ENSEMBLE_PIPE_TPUB_MIN;
-// inert: t22-tpub20-nofilt-26b6
+const bool test22Scale =
+wEq(WTP, .5) && (TPUB >= ENSEMBLE_PIPE_TPUB_MIN || TPUB > TPBASE + 1.0);
 io::rint(n_);
 for (long long i = 0; i < n_; ++i) {
 long long b = 1;
@@ -450,23 +452,13 @@ long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
 int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
 int publicNextCloud = 0;
 bool publicTdrBulkSeen = false;
-vector<vector<int>> publicWaves;
+bool publicBatchActive = false;
+vector<int> publicBatch;
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
 auto reportSingleFlightDebug = [&]() {
 fprintf(stderr, "single-flight enabled=%d rounds=%lld\n",
 singleFlightDecode ? 1 : 0, debugSingleFlightRounds);
-};
-#endif
-#ifdef PIPE_TRACE
-long long pipeFamily = 0, pipeSkipPref = 0, pipeSkipTpot = 0,
-pipeSkipDbase = 0, pipeOn = 0, pipeFire = 0, pipeG2 = 0,
-pipeSeats = 0, pipeAct = 0;
-auto reportPipeTrace = [&]() {
-fprintf(stderr,
-"pipe family=%lld skipPref=%lld skipTpot=%lld skipDbase=%lld on=%lld fire=%lld g2=%lld seats=%lld act=%lld t22=%d tpub=%.6f wtp=%.6f\n",
-pipeFamily, pipeSkipPref, pipeSkipTpot, pipeSkipDbase, pipeOn,
-pipeFire, pipeG2, pipeSeats, pipeAct, test22Family ? 1 : 0, TPUB, WTP);
 };
 #endif
 int nLive = 0, nActive = 0, nPrefPend = 0, nDecFlight = 0, nCohort = 0;
@@ -486,18 +478,12 @@ io::oflush();
 #ifdef SINGLE_FLIGHT_DEBUG
 reportSingleFlightDebug();
 #endif
-#ifdef PIPE_TRACE
-reportPipeTrace();
-#endif
 return 0;
 }
 if (io::tok[0] == 'E' && io::tok[1] == 'N') {
 io::oflush();
 #ifdef SINGLE_FLIGHT_DEBUG
 reportSingleFlightDebug();
-#endif
-#ifdef PIPE_TRACE
-reportPipeTrace();
 #endif
 return 0;
 }
@@ -788,15 +774,7 @@ mDesign = min(mDesign, searchCap);
 }
 bool pipeStagger = false;
 bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
-#ifdef PIPE_TRACE
-if (test22Family) {
-++pipeFamily;
-if (prefillWantsEdge) ++pipeSkipPref;
-if (tpotBound) ++pipeSkipTpot;
-if (!(DBASE > 0)) ++pipeSkipDbase;
-}
-#endif
-if (test22Family && !prefillWantsEdge) {
+if (test22Family && !prefillWantsEdge && !tpotBound && DBASE > 0) {
 const int poolD =
 (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
 const int hi = min(4096, max(1, M_EFF));
@@ -829,57 +807,32 @@ if (m >= hi) break;
 m = min(hi, m + max(1, m / 8));
 }
 if (best > -0.5) {
-if (best <= 1e-12) bestM = softM;
+if (best <= 1e-12) {
+bestM = softM;
+}
 mDesign = bestM;
-}
 pipeStagger = true;
-#ifdef PIPE_TRACE
-if (min(ENSEMBLE_PIPE_GCAP, max(1, poolD) / max(1, mDesign)) >= 2) ++pipeG2;
-#endif
 }
-#ifdef PIPE_TRACE
-if (pipeStagger) ++pipeOn;
-#endif
+}
 int nAssigned = 0;
 ANS.clear();
 if (publicMode) {
 if (edgeFree) {
 bool done = false;
-const bool pipeActive = publicPipeDecode && BK[B_ARR].empty() &&
-BK[B_PPOST].empty();
-const int publicWaveCap = pipeActive ? 2 : 1;
-vector<int> postBatch;
-int readyWave = -1;
-if (pipeActive && !BK[B_DPOST].empty()) {
-postBatch = BK[B_DPOST];
-sort(postBatch.begin(), postBatch.end());
-int pending = 0;
-for (const auto& wave : publicWaves) pending += (int)wave.size();
-bool allReady = pending > 0 && (int)postBatch.size() == pending;
-if (!allReady && (int)postBatch.size() * 2 < pending)
-postBatch.clear();
-} else {
-for (int w = 0; w < (int)publicWaves.size(); ++w) {
-bool ok = !publicWaves[w].empty();
-for (int rid : publicWaves[w]) {
+bool batchReady = publicBatchActive;
+if (batchReady) {
+for (int rid : publicBatch) {
 if (R[rid].st != ST_DPOST_READY) {
-ok = false;
-break;
-}
-}
-if (ok) {
-readyWave = w;
-postBatch = publicWaves[w];
+batchReady = false;
 break;
 }
 }
 }
-const bool batchReady = !postBatch.empty();
 const bool throughputPriority = WTP >= WC;
 auto dispatchPublicPost = [&]() {
 as("E D POST -1 ");
-ai((long long)postBatch.size());
-for (int rid : postBatch) {
+ai((long long)publicBatch.size());
+for (int rid : publicBatch) {
 ac(' ');
 ai(rid);
 setSt(rid, ST_DPOST_RUN);
@@ -889,21 +842,8 @@ ac('\n');
 edgeFree = false;
 running++;
 nAssigned++;
-if (readyWave >= 0) {
-publicWaves.erase(publicWaves.begin() + readyWave);
-} else {
-vector<char> gone(R.size(), 0);
-for (int rid : postBatch) gone[rid] = 1;
-for (auto& wave : publicWaves) {
-int n = 0;
-for (int rid : wave)
-if (!gone[rid]) wave[n++] = rid;
-wave.resize(n);
-}
-publicWaves.erase(remove_if(publicWaves.begin(), publicWaves.end(),
-[](const vector<int>& w) { return w.empty(); }),
-publicWaves.end());
-}
+publicBatch.clear();
+publicBatchActive = false;
 done = true;
 };
 if (throughputPriority && batchReady) dispatchPublicPost();
@@ -996,7 +936,7 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && (int)publicWaves.size() < publicWaveCap) {
+if (!done && !publicBatchActive) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
@@ -1034,7 +974,8 @@ setSt(rid, ST_DPRE_RUN);
 bmove(rid, -1);
 }
 ac('\n');
-publicWaves.push_back(batch);
+publicBatch = batch;
+publicBatchActive = true;
 nDecFlight += (int)batch.size();
 edgeFree = false;
 running++;
@@ -1182,11 +1123,6 @@ if (fire) {
 batch.clear();
 if (pipeStagger) {
 int seats = mDesign;
-#ifdef PIPE_TRACE
-++pipeFire;
-pipeSeats += seats;
-pipeAct += (int)BK[B_ACT].size();
-#endif
 if ((int)BK[B_ACT].size() > seats) {
 batch = BK[B_ACT];
 nth_element(batch.begin(), batch.begin() + seats, batch.end(),
