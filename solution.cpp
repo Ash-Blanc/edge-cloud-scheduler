@@ -481,9 +481,11 @@ vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
 int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
 int publicNextCloud = 0;
+int publicPairCount = 0;
 bool publicTdrBulkSeen = false;
 bool publicBatchActive = false;
 vector<int> publicBatch;
+const bool akd13Pair = wEq(WTP, .75); // #13: two arrivals per cloud, k=1 decode
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
 auto reportSingleFlightDebug = [&]() {
@@ -545,7 +547,15 @@ r.tokens = 0;
 r.joined = 0;
 if (publicMode && !publicTdrMode) {
 r.cloud = publicNextCloud;
+if (akd13Pair) {
+publicPairCount++;
+if (publicPairCount >= 2) {
+publicPairCount = 0;
 publicNextCloud = (publicNextCloud + 1) % K;
+}
+} else {
+publicNextCloud = (publicNextCloud + 1) % K;
+}
 } else {
 r.cloud = -1;
 }

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Prove the best-of-official public port and its negative guard.
 
-At the eight selected weights (matched with 1e-6, matching the scheduler's
-wEq), plus the pure-latency #3 arm (WTP=0, WC=1, DBASE<2.5), the candidate
-must reproduce submission 387914886. On WTP=1, 0.67 and WTP=0 with DBASE>=2.5
-it must reproduce the current-main binary. A reconstructed sat5 case at
-WTP=0.80 / 0.98 must match public AND differ from the pre-public baseline;
-otherwise public dispatch is dead.
+At seven of the eight selected weights (matched with 1e-6), plus the
+pure-latency #3 arm (WTP=0, WC=1, DBASE<2.5), the candidate must reproduce
+submission 387914886. WTP=0.75 stays on that public path but pairs two
+arrivals onto the same cloud for official #13; K=1 must still match public
+(no-op), K>1 may differ. On WTP=1, 0.67 and WTP=0 with DBASE>=2.5 it must
+reproduce the current-main binary. A reconstructed sat5 case at WTP=0.80 /
+0.98 must match public AND differ from the pre-public baseline; otherwise
+public dispatch is dead.
 
 Usage: public_port_compare.py CANDIDATE PUBLIC CURRENT_MAIN [BASELINE]
 """
@@ -74,6 +76,11 @@ def main():
         if akd3_case(case):
             reference = public
             lineage = "public"
+        elif abs(case.wtp - 0.75) <= 1e-6:
+            # Public AKD with same-cloud pairing for official #13. Traces
+            # differ from 387914886 RR on K>1; K=1 is checked below.
+            reference = None
+            lineage = "akd13"
         elif public_weight(case.wtp) and abs(case.wtp - 0.05) > 1e-6 and abs(case.wtp - 0.15) > 1e-6:
             reference = public
             lineage = "public"
@@ -111,6 +118,26 @@ def main():
                 f"{case.name:<24} wtp={case.wtp:.8f} {lineage:<6} "
                 f"CHECK  frames={actual_trace[1]} sha256={actual_trace[0][:12]}"
             )
+
+    # WTP=0.75 keeps publicMode but pairs two arrivals onto the same cloud
+    # (official #13). K=1 pairing is a no-op, so it must still match public.
+    k1 = next(c for c in cases if c.name == "bal-K1")
+    k1_75 = copy.deepcopy(k1)
+    k1_75.name = "public-guard-0.75-K1"
+    k1_75.wtp = 0.75
+    k1_75.wc = 0.25
+    pub_m, pub_t = traced_run(public, k1_75)
+    cand_m, cand_t = traced_run(candidate, k1_75)
+    k1_match = pub_m == cand_m and pub_t == cand_t
+    print(
+        f"{k1_75.name:<24} public-parity "
+        f"{'MATCH' if k1_match else 'MISMATCH'} "
+        f"cand={cand_t[0][:12]} pub={pub_t[0][:12]}"
+    )
+    if not k1_match:
+        failures += 1
+        print(f"  public  metrics={pub_m} trace={pub_t}")
+        print(f"  actual  metrics={cand_m} trace={cand_t}")
 
     # Mandatory: WTP=0.80 / 0.98 on a sat5 reconstruction must equal public
     # 387914886 and must differ from the pre-public baseline. Matching
