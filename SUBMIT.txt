@@ -32,10 +32,21 @@ NEW/RETESTED levers on the honest #5/#6 (wEq .80/.90, gate OK):
 - HOLD: +0.30 same as fat1. STICKY/combo/stream+fat: loss.
 Do not ship. Tiny is not shipped.
 
-BAN addendum: STREAM/FIRE1/FAT/HOLD/CUT/SJFPRE/LPTPRE/DPROC_PREF on these
-k-shrink-identical recons. Still BAN pairing, k-shrink, PART2/two-wave,
-maximal-ready, COH, SIZE1, STEER, DPROC_OL.
+LATENCY-IMPORT pass (this round, still no-ship):
+- Prefix already takes all ready (first D PRE 26/63, then 100/150). TAKEALL,
+  RATE (gapPredict off), LINKSZ, LATFLOOR, single-flight #19: IDENTICAL.
+- #22 DPOST coalescing skipped (≡ AKD one-batch; kuse is k-shrink).
+- CAP 16/32/64 all-rounds **kill** on honest k=K (−168/−211 #5, −94/−201 #6).
+- ACCUM +0.21/+0.44 pts; DRYCLOUD +0.36/+0.47; LPT P PROC +1.05/#5 0/#6.
+  YIELD1 −3.5. Tiny/loss. See docs/akd56-latency-import.md.
 
-16.8k BLOCKED. Gap 759 (16800−16041). Honest #5+#6 recons exist; remaining
-ntp is prefill-bound k=K (official k-shrink no-op). Every original and new
-lever on them is tiny, identical, or a loss.
+BAN addendum: STREAM/FIRE1/FAT/HOLD/CUT/SJFPRE/LPTPRE/DPROC_PREF,
+TAKEALL/RATE/LATFLOOR/single-flight, all-round CAP, ACCUM/DRYCLOUD,
+SJFPROC/LPTPROC/YIELD1 on these k-shrink-identical recons. Still BAN
+pairing, k-shrink, PART2/two-wave, maximal-ready, COH, SIZE1, STEER,
+DPROC_OL.
+
+16.8k BLOCKED. Gap 759 (16800−16041). Honest #5+#6 recons exist; leftover
+ntp is the decode tail (k=K, ~96 rounds), not the prefix. Next family:
+unique-weight leftover outside .80/.90, or per-cloud decode barrier that
+is not K/2 wait-all two-wave. Do not soup failed probes.
