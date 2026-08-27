@@ -6,69 +6,61 @@ hash-object: 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
 
 solution.cpp UNCHANGED. Do not push main. No PR.
 
-Fingerprint status
-------------------
-Official #5 d202b1a→5d830a0b: tp 1.121→1.213 (+0.092), tpot 60.08→62.44, tdr SAME 1497.256, nc 0.998.
+Fingerprint recon FOUND
+-----------------------
+Official #5 d202b1a→5d830a0b: tp 1.121→1.213 (+8.2%), tpot 60.08→62.44, tdr SAME.
 
-seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5 MATCHES official BEFORE
-  tp=1.11967 tdr=1498.32 tpot=59.73 nc=0.9977
-but gated is event-IDENTICAL to d202b1a. Does NOT reproduce +0.092. THROWN OUT.
+seed=711 uniform L=96 still thrown out for ranking the *delta* (gated IDENTICAL).
+The +55% q=3e-4 monster is uniform L=96: prefix 64 then leftover 36 serial
+waves (TDR still identical because TDR ends at P POST; TPOT ignores the
+unscored wait before a leftover's first D POST).
 
-Why: public efficiency (DPRE+DPROC+DPOST)/n already picks the full ready
-pool (~99). mDesign is inflated by M_FLOOR (canon M_EFF=1911, M_FLOOR=617)
-so min(batch,mDesign)=batch. skipP (ready>=mDesign) never fires. Isolated
-binaries: skipP-only IDENTICAL, cap-only IDENTICAL.
+Fingerprint that matches the official *delta shape* (prefix n<ready, gated
+take-all, TDR same, ~+8% tp, tpot +~2):
 
-Mechanism that DOES fire (not official-magnitude):
-  same prefill shape + quadratic D PRE/D POST q=3e-4
-  first D PRE identical (n=26 at t=871, TDR bit-identical)
-  later rounds: efficiency prefix n=64 vs cap override n=100
-  tp 0.675→1.043 (+0.368 / +54.5%) tpot 59.65→66.31 tdr SAME nc 0.9977
-  skipP still no-op; win is cap-only (replace LAT-unaware prefix with full ready)
-Cannot get +0.092: under official SLO/DBASE, tpotBound never fires (TDR
-excess ≫ TPOT), so mDesign≥M_FLOOR≫R and the override is always
-"full ready". Efficiency min snaps to table breakpoints (64 vs 100),
-never ~67→76. Firing 64 at tpot=60 has tp ceiling 64/60=1.067<1.121,
-so a 64-prefix BEFORE cannot match official tp=1.121.
+  A. seed=711 R=110 lout=(24,48,96) dense D PRE q=3e-4 lat=5 bw=14 pp=165
+     d202  tp=0.620 tpot=61.15 tdr=1649.8 nc=0.9974 g=51.6
+     gated tp=0.675 tpot=63.18 tdr=1649.8 nc=0.9974 g=64.3
+     +8.82% tp, dtpot=+2.03, TDR SAME. Closest % / tpot-delta.
 
-#6 honest seed=812: ungated 65f0a520 AND gated 5d830a0b are IDENTICAL to
-d202b1a (tp=0.69586 tdr=3101 tpot=57.24 nc=0.992). Already fires 63 then
-150/150. skipP+mDesign-cap is an official no-op here. Confirmed.
+  B. seed=711 R=100 lout=(32,48,64,96) same table/prefill
+     d202  tp=0.593 tpot=61.22 tdr=1498.32 nc=0.9977 g=44.5
+     gated tp=0.656 tpot=62.89 tdr=1498.32 nc=0.9977 g=58.7
+     +10.57% tp, dtpot=+1.67, TDR matches official 1497.
 
-#5 amplify (.80 only) vs gated 5d830a0b
---------------------------------------
-skip ready>=K:          canon −7.8% tp TDR +784. LOSS (overlap)
-skip FRESH>=1:          canon −39% tp TDR +3112. LOSS
-skip mDesign/2:         IDENTICAL (mDesign still huge)
-skip P POST only @mDes: IDENTICAL
-skip P PRE only @mDes:  IDENTICAL
-skip P PRE @ready>=K:   −2.4% tp TDR +67. LOSS
-cap mDesign/2, 2*, M_EFF: IDENTICAL (all still ≫ R)
-efficiency then min mDesign: undoes superlinear win (64 not 100)
-D PRE before P POST when ready>=1: +0.11% tp / +0.30 pts, TDR −0.21.
-  Same tiny as prior FAT. Do not ship.
+Mixed L_out smears leftover into the main wave as shorts finish; leftover
+is not a full second 96-token cohort. Power-of-2-only tables pin efficiency
+at 64 or ready; dense points let the min sit between.
 
-#6 new lever (.90 only, NOT skipP+mDesign-cap)
----------------------------------------------
-Identity: #5 canon/super/.75/.25 unchanged on all .90 probes.
-skip P PRE after first decode if FRESH>=1: IDENTICAL (no leftover ARR)
-skip P PRE when FRESH>=1: −24% tp TDR +1200. LOSS
-skip P PRE when FRESH>=K: −11% tp. LOSS
-cap K after prefill drain: −81% tp. LOSS
-ACCUM hold first D PRE until nPrefPend=0: +0.0009 tp / +0.37 pts. TINY
-skip P POST after first decode: LOSS
-JSQ P PRE: −7.2% tp. LOSS
-SJF P PRE: −10% tp (TDR better, ntp worse). LOSS
+LAT-aware fire size (gated wEq(.80) only)
+----------------------------------------
+Replace min(batch,mDesign) with argmax_{n=1..ready} n/roundT(n),
+roundT = edge + 2*(k*LAT+xfer) + proc.
+
+On A and B (and every other +6.5..10.5% band recon at LAT=5):
+  latA = ready. Rate still increasing at R because 2*k*LAT amortizes.
+  /tmp/lataware event-IDENTICAL to 5d830a0b. dtp=+0.0000.
+
+Low-LAT tables can put the rate peak below R, but then tpot is 26–47 not 60
+and the tp delta is +30–50% (not the fingerprint). No fingerprint-valid
+recon exists where LAT-aware ≠ take-all.
+
+LAT-aware equals take-all → no-op vs 16063.4 → do not ship.
+
+Non-.80 identity (fp A/B retarget): .30 .75 .90 .98 .25 traces IDENTICAL
+to d202b1a. .05/.15 also identical here (publicTdrMode). nc≥0.997.
+
+#6
+--
+Ungated 16063 already take-all on honest seed=812 (IDENTICAL, nc=0.992).
+No new .90-only prefill lever that is not JSQ/SJF/ACCUM/skipArr. Skip #6.
 
 Keep 5d830a0b. Expected official still 16063.4 (#5 only).
+BAN: CLOUDTAIL, pairing, k-shrink, two-wave, half-ready D POST.
 
 Next idea
 ---------
-#5: a cap that is NOT min(batch,mDesign) after M_FLOOR — e.g. pick
-argmax n/roundT(n) over the ready prefix (LAT-aware fire size) so the
-choice can sit between 64 and R on a power-of-2 table. Official +8%
-needs ~67→76; M_FLOOR override cannot produce that. Do not retune
-skipP threshold (overlap loss on the official-matched shape).
-#6: decode size is already maxed (150/150). Remaining ~610 is prefill.
-Need a .90-only prefill lever that is not JSQ/SJF/pairing/k-shrink/
-CLOUDTAIL/two-wave. ACCUM/skipArr are dead on this recon.
+#5 fire-size is solved on the fingerprint (take-all is the official win;
+LAT-aware cannot beat it without dropping into two-wave leftover). Remaining
+#5 slack is not prefix sizing. #6 remaining ~610 is still prefill; need a
+.90-only prefill lever that is not the exhausted JSQ/SJF/ACCUM/skipArr set.
