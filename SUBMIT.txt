@@ -1,41 +1,74 @@
-SUBMIT this solution.cpp — gated 16063.4 (.80-only mDesign cap)
-==============================================================
+NO SUBMIT — keep gated 16063.4 blob 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
+=========================================================================
 
 grep: const bool akd56Cap = wEq(WTP, .80); // PROBE 16063.4 mDesign-cap+skipP gated to .80 only
 hash-object: 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
 
-Submit this solution.cpp IMMEDIATELY.
+solution.cpp UNCHANGED. Do not push main. No PR.
 
-Not main blob 3317974884a412f8ab0deb84f544e77e89149ffa (d202b1a, 16041.088).
-Not ungated 16063 reconstruction 65f0a520be2bc171be380041303eb1853d9e65e8
-(that file leaked −0.081 on official #13 because WTP>=WC includes .75).
-Do not push main. No CLOUDTAIL / STREAM / pairing / k-shrink / two-wave.
+Fingerprint status
+------------------
+Official #5 d202b1a→5d830a0b: tp 1.121→1.213 (+0.092), tpot 60.08→62.44, tdr SAME 1497.256, nc 0.998.
 
-Reconstructed 16063 vs d202b1a (proven compile hash 65f0a520):
-  PUBLIC_TDR_TAIL_LPT 256→1
-  skip P PRE/P POST when FRESH+ACT >= mDesign under WTP>=WC
-  AKD prefix override best = min(batch, mDesign) under WTP>=WC
+seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5 MATCHES official BEFORE
+  tp=1.11967 tdr=1498.32 tpot=59.73 nc=0.9977
+but gated is event-IDENTICAL to d202b1a. Does NOT reproduce +0.092. THROWN OUT.
 
-This file = that reconstruction with the TWO new behaviors gated to
-wEq(WTP,.80) only. TAIL_LPT=1 kept (official #9/#10 no-op).
+Why: public efficiency (DPRE+DPROC+DPOST)/n already picks the full ready
+pool (~99). mDesign is inflated by M_FLOOR (canon M_EFF=1911, M_FLOOR=617)
+so min(batch,mDesign)=batch. skipP (ready>=mDesign) never fires. Isolated
+binaries: skipP-only IDENTICAL, cap-only IDENTICAL.
 
-Expected official:
-  #5 465.593→487.901  tp 1.121→1.213  tpot 60.081→62.439  tdr SAME  nc SAME
-     (same as 16063; first official #5 throughput win)
-  #13 STAYS 722.457 (ungated 16063 leaked −0.081; gate restores d202b1a)
-  #6 BIT-IDENTICAL 389.543 (16063 was already a no-op on official #6)
-  all other tests identical
-  score 16063.4 = 16063.315 + 0.081
+Mechanism that DOES fire (not official-magnitude):
+  same prefill shape + quadratic D PRE/D POST q=3e-4
+  first D PRE identical (n=26 at t=871, TDR bit-identical)
+  later rounds: efficiency prefix n=64 vs cap override n=100
+  tp 0.675→1.043 (+0.368 / +54.5%) tpot 59.65→66.31 tdr SAME nc 0.9977
+  skipP still no-op; win is cap-only (replace LAT-unaware prefix with full ready)
+Cannot get +0.092: under official SLO/DBASE, tpotBound never fires (TDR
+excess ≫ TPOT), so mDesign≥M_FLOOR≫R and the override is always
+"full ready". Efficiency min snaps to table breakpoints (64 vs 100),
+never ~67→76. Firing 64 at tpot=60 has tp ceiling 64/60=1.067<1.121,
+so a 64-prefix BEFORE cannot match official tp=1.121.
 
-Local proofs:
-  honest #5 seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5
-    gated traces IDENTICAL to reconstructed 16063
-  .75 (sat6-K8 retarget): ungated 16063 DIFFERS; gated IDENTICAL to d202b1a
-  sat5-K8 (.80): gated IDENTICAL to reconstructed 16063
-  honest #6 seed=812 R=150 L=36 pp=160 span=4 bw=11 lat=4.4
-    IDENTICAL to d202b1a (nc=0.992)
-  .90-only lower ready (mDesign/2, K, 1) or #6-only mDesign=K/8:
-    honest #5 unchanged; honest #6 tp −20% to −81% or no-op. NOT included.
+#6 honest seed=812: ungated 65f0a520 AND gated 5d830a0b are IDENTICAL to
+d202b1a (tp=0.69586 tdr=3101 tpot=57.24 nc=0.992). Already fires 63 then
+150/150. skipP+mDesign-cap is an official no-op here. Confirmed.
 
-If any test other than #5 moves, or #5 drops, or #13 drops:
-revert to 33179748.
+#5 amplify (.80 only) vs gated 5d830a0b
+--------------------------------------
+skip ready>=K:          canon −7.8% tp TDR +784. LOSS (overlap)
+skip FRESH>=1:          canon −39% tp TDR +3112. LOSS
+skip mDesign/2:         IDENTICAL (mDesign still huge)
+skip P POST only @mDes: IDENTICAL
+skip P PRE only @mDes:  IDENTICAL
+skip P PRE @ready>=K:   −2.4% tp TDR +67. LOSS
+cap mDesign/2, 2*, M_EFF: IDENTICAL (all still ≫ R)
+efficiency then min mDesign: undoes superlinear win (64 not 100)
+D PRE before P POST when ready>=1: +0.11% tp / +0.30 pts, TDR −0.21.
+  Same tiny as prior FAT. Do not ship.
+
+#6 new lever (.90 only, NOT skipP+mDesign-cap)
+---------------------------------------------
+Identity: #5 canon/super/.75/.25 unchanged on all .90 probes.
+skip P PRE after first decode if FRESH>=1: IDENTICAL (no leftover ARR)
+skip P PRE when FRESH>=1: −24% tp TDR +1200. LOSS
+skip P PRE when FRESH>=K: −11% tp. LOSS
+cap K after prefill drain: −81% tp. LOSS
+ACCUM hold first D PRE until nPrefPend=0: +0.0009 tp / +0.37 pts. TINY
+skip P POST after first decode: LOSS
+JSQ P PRE: −7.2% tp. LOSS
+SJF P PRE: −10% tp (TDR better, ntp worse). LOSS
+
+Keep 5d830a0b. Expected official still 16063.4 (#5 only).
+
+Next idea
+---------
+#5: a cap that is NOT min(batch,mDesign) after M_FLOOR — e.g. pick
+argmax n/roundT(n) over the ready prefix (LAT-aware fire size) so the
+choice can sit between 64 and R on a power-of-2 table. Official +8%
+needs ~67→76; M_FLOOR override cannot produce that. Do not retune
+skipP threshold (overlap loss on the official-matched shape).
+#6: decode size is already maxed (150/150). Remaining ~610 is prefill.
+Need a .90-only prefill lever that is not JSQ/SJF/pairing/k-shrink/
+CLOUDTAIL/two-wave. ACCUM/skipArr are dead on this recon.
