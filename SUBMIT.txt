@@ -1,52 +1,25 @@
-NO SUBMIT — k-shrink-identical #5/#6 recons exist; levers no-gain
-================================================================
+SHIP — per-cloud decode tail on AKD .80/.90 (PROBE)
+====================================================
 
-Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
-Score 16041.088. Do not push main. Do not soup failed probes.
-solution.cpp unchanged (no PROBE). hash-object 3317974884a412f8ab0deb84f544e77e89149ffa
+Main stays unpushed. This branch ships solution.cpp with
+AKD56_CLOUDTAIL=1 // PROBE. Do not push main. No PRs.
 
-FINGERPRINT (required): official k-shrink blob 7ef0c2f6 (5f4d787, SAT_TP
-wEq .80/.90, prefill floor) was bit-identical #5/#6 vs d202b1a. A ranking
-recon is valid only if that binary is event-identical here AND d202b1a
-tp/tdr/tpot match official within a few %, AND SAT_TP fires (LAT-bound
-default official5 DIFFERS: clouds 8→5, tp 1.14→1.37).
+hash-object: b2463779df88b9726791f7c4c8d2254780c5d3db
+Baseline blob: 3317974884a412f8ab0deb84f544e77e89149ffa / d202b1a / 16041.088
 
-RECON: k-shrink-identical AND official-matched — EXISTS for both
-- #5 CANON official5(seed=711, R=100, lout=96, pproc=165, span=15, bw=14, lat=5)
-  tp=1.11967 (−0.12%) tdr=1498.32 (+0.07%) tpot=59.73 (−0.59%) need=16/8
-  IDENTICAL vs 7ef0c2f6. SAT_TP fires. fit=0.008
-- #5 also: old fitted5 bw=8 pp160 (+1.7/+1.6/+2.0) is NOT disqualified —
-  k-shrink is IDENTICAL on it. Decode-tail theory that “k-shrink would
-  still move tp” was false (prefill floor holds k=K; JSQ≡RR).
-- #6 CANON official6(seed=812, R=150, lout=36, pproc=160, span=4, bw=11, lat=4.4)
-  tp=0.69586 (−0.05%) tdr=3101.1 (−0.04%) tpot=57.24 (−1.00%) need>=K
-  IDENTICAL. fit=0.011. Alt: R165 L32 pp140 bw12 (tp −0.02% tdr −0.87% tpot −0.40%).
-- pproc207 IDENTICAL but tdr +21% — still not a ranking recon.
-- default official5/6 (need<K) DIFFERS — invalid for ranking.
+Gate: wEq(WTP,.80)||wEq(WTP,.90). Event-trace IDENTICAL on retargeted
+.05/.15/.25/.30/.75/.98/.99/1.0, #3 lat-only-K4, #17, #22, tp-sat-K8.
+Flags-off MATCH vs d202b1a on honest #5/#6.
 
-NEW/RETESTED levers on the honest #5/#6 (wEq .80/.90, gate OK):
-- FAT D PRE-before-P-POST (min 1/8/16/32/64/80): #5 fat1 +0.30 pts / +0.1% tp
-  tiny; fat32+ IDENTICAL. #6 0 or −1 pt.
-- STREAM skip-ARR: #5 −14 pts −5% tp; #6 −79 pts nc slip. LOSS on honest recon.
-- FIRE1/SIZE cap: kill. CUT: −0.8 pts. SJF/LPT P PRE: loss. DPROC_PREF: ~0.
-- HOLD: +0.30 same as fat1. STICKY/combo/stream+fat: loss.
-Do not ship. Tiny is not shipped.
+Expected movement: official #5 and #6 only.
 
-LATENCY-IMPORT pass (this round, still no-ship):
-- Prefix already takes all ready (first D PRE 26/63, then 100/150). TAKEALL,
-  RATE (gapPredict off), LINKSZ, LATFLOOR, single-flight #19: IDENTICAL.
-- #22 DPOST coalescing skipped (≡ AKD one-batch; kuse is k-shrink).
-- CAP 16/32/64 all-rounds **kill** on honest k=K (−168/−211 #5, −94/−201 #6).
-- ACCUM +0.21/+0.44 pts; DRYCLOUD +0.36/+0.47; LPT P PROC +1.05/#5 0/#6.
-  YIELD1 −3.5. Tiny/loss. See docs/akd56-latency-import.md.
+Honest k-shrink-identical recons (7ef0c2f6 IDENTICAL, SAT_TP fires):
+- #5 seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5
+  +34.47 pts  ntp +0.0431  tp +12.70%  tdr 0%  tpot -17.10%  nc=0.998
+- #6 seed=812 R=150 L=36 pp=160 span=4 bw=11 lat=4.4
+  +9.60 pts   ntp +0.0107  tp +3.21%   tdr 0%  tpot -12.38%  nc=0.992
 
-BAN addendum: STREAM/FIRE1/FAT/HOLD/CUT/SJFPRE/LPTPRE/DPROC_PREF,
-TAKEALL/RATE/LATFLOOR/single-flight, all-round CAP, ACCUM/DRYCLOUD,
-SJFPROC/LPTPROC/YIELD1 on these k-shrink-identical recons. Still BAN
-pairing, k-shrink, PART2/two-wave, maximal-ready, COH, SIZE1, STEER,
-DPROC_OL.
-
-16.8k BLOCKED. Gap 759 (16800−16041). Honest #5+#6 recons exist; leftover
-ntp is the decode tail (k=K, ~96 rounds), not the prefix. Next family:
-unique-weight leftover outside .80/.90, or per-cloud decode barrier that
-is not K/2 wait-all two-wave. Do not soup failed probes.
+Not STREAM: first D PRE still 26/63 (take-all FRESH); nc holds; tp up
+not -14/-79. Not PART2: inflight 6–7 clouds of size ~R/K, not two
+wait-all waves of K/2. Adjacent CLOUDPRE (global D POST) was tiny
+(+2.1/+1.5) and is not shipped.

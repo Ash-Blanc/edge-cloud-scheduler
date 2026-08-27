@@ -213,7 +213,7 @@ ST_FIN
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
 #ifndef AKD56_CLOUDTAIL
-#define AKD56_CLOUDTAIL 0
+#define AKD56_CLOUDTAIL 1 // PROBE per-cloud decode tail after prefill
 #endif
 #ifndef AKD56_CLOUDPRE
 #define AKD56_CLOUDPRE 0
