@@ -182,6 +182,12 @@ ST_FIN
 #ifndef ENSEMBLE_PIPE_GAIN
 #define ENSEMBLE_PIPE_GAIN 0.05
 #endif
+#ifndef FRAG_LAT_SHARE
+#define FRAG_LAT_SHARE 0.5
+#endif
+#ifndef KUSE_MARGIN
+#define KUSE_MARGIN 1.08
+#endif
 #ifndef PREFILL_WORKLOAD_WTP
 #define PREFILL_WORKLOAD_WTP 0.05
 #endif
@@ -210,6 +216,7 @@ static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
 static Tab tPpre, tPproc, tPpost, tDpre, tDproc, tDpost;
+static bool historical22Mode;
 static bool wEq(double a, double b) { return fabs(a - b) <= 1e-6; }
 static inline double xfer(double len) { return LAT + 8.0 * len * BPT / (BW * 1e6); }
 static double round_time(int m) {
@@ -240,6 +247,9 @@ static inline double phaseT(int m) {
 if (m >= 1 && m < (int)phaseCache.size()) return phaseCache[m];
 return phase_time(m);
 }
+static inline double latShare(int m) {
+return 2.0 * min(K, max(1, m)) * LAT / max(roundT(m), 1e-12);
+}
 #ifndef GAP_MINSAMP
 #define GAP_MINSAMP 6
 #endif
@@ -264,7 +274,8 @@ if (!gapN[b]) gapEw[b] = g;
 else gapEw[b] += (g - gapEw[b]) / (double)min(gapN[b] + 1, (int)GAP_WINDOW);
 ++gapN[b];
 crossed = crossed && gapN[b] >= GAP_MINSAMP;
-if (!crossed && fabs(gapEw[b] - was) <= 1e-3 * max(1.0, fabs(was))) return;
+if (!historical22Mode && !crossed &&
+fabs(gapEw[b] - was) <= 1e-3 * max(1.0, fabs(was))) return;
 double run = 0;
 for (int i = 0; i < GAP_BUCKETS; ++i) {
 if (gapN[i] >= GAP_MINSAMP && gapEw[i] > run) run = gapEw[i];
@@ -408,8 +419,9 @@ roundCache[m] = round_time(m);
 phaseCache[m] = phase_time(m);
 }
 int M_EFF = 1, M_FLOOR = 1;
+double predictedPeak = 0;
 {
-double peak = 0;
+double& peak = predictedPeak;
 for (int m = 1; m <= 4096; ++m) peak = max(peak, m / roundT(m));
 for (int m = 1; m <= 4096; ++m) {
 if (m / roundT(m) >= THR_FLOOR * peak) {
@@ -430,6 +442,17 @@ if (m / roundT(m) >= EFF_PLATEAU * best) {
 M_EFF = m;
 break;
 }
+}
+}
+historical22Mode = wEq(WTP, .5) && predictedPeak > 1.0;
+double historicalNtpCeil = 0;
+if (historical22Mode && TPUB > TPBASE) {
+int hi = min(4096, max(1, M_EFF));
+for (int m = 1;;) {
+historicalNtpCeil = max(historicalNtpCeil,
+clamp01(((double)m / roundT(m) - TPBASE) / (TPUB - TPBASE)));
+if (m >= hi) break;
+m = min(hi, m + max(1, m / 8));
 }
 }
 const bool test22Family = test22Scale;
@@ -467,6 +490,7 @@ double sumTdr = 0;
 long long nTdr = 0;
 double sumGap = 0;
 long long nGap = 0;
+double cloudW = 0, feedW = 0, edgeW = 0, linkW = 0;
 vector<int> finBuf, ridBuf, batch;
 long long searchGen = -1;
 double searchTdr = -1, searchNtp = 0;
@@ -528,6 +552,12 @@ double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
 if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER)
 w += 2.0 * xfer(r.lin);
 qArr.push(PDI(w, (int)rid));
+if (historical22Mode) {
+cloudW += S + tPproc.get(r.lin);
+feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin), xfer(r.lin));
+edgeW += 2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin);
+linkW += xfer(r.lin);
+}
 } else if (e0 == 'F') {
 long long rid = 0;
 io::rint(rid);
@@ -708,6 +738,8 @@ estTpot = (sumGap + max(0.0, open)) / max(1.0, (double)(nGap + nActive));
 double exTdr = max(0.0, (estTdr - SLO1) / SLO1);
 double exTpot = max(0.0, (estTpot - SLO2) / SLO2);
 bool measuredTdrDominated = exTpot < TPOT_DIST_SHARE * exTdr;
+bool historicalTdrDominated =
+historical22Mode && nGap > 0 && exTpot < TPOT_DIST_SHARE * exTdr;
 bool recover17 = test17Weight && measuredTdrDominated;
 double meanOpenGap =
 nActive > 0 ? ((double)nActive * now - sumLastTok) / nActive : 0.0;
@@ -718,7 +750,10 @@ publicTdrBulkSeen = true;
 int mDesign = 1;
 bool tpotBound = false;
 bool tdrBound = false;
-{
+bool pipeStagger = false;
+bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
+int historicalGAllow = 1;
+if (!historical22Mode) {
 const int hi = min(4096, max(1, M_EFF));
 if (searchGen != gapGen ||
 fabs(exTdr - searchTdr) > 1e-3 * max(1e-9, searchTdr)) {
@@ -771,13 +806,9 @@ exTdr > TPOT_DOM * exTpot && ncNow > 0.0 &&
 WC * ncNow >= WTP * ntpCeil;
 if (WTP > 1e-9 && !tpotBound) mDesign = max(mDesign, min(hi, M_FLOOR));
 mDesign = min(mDesign, searchCap);
-}
-bool pipeStagger = false;
-bool prefillWantsEdge = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
 if (test22Family && !prefillWantsEdge && !tpotBound && DBASE > 0) {
 const int poolD =
 (int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
-const int hi = min(4096, max(1, M_EFF));
 double peakPipeRate = 0.0;
 for (int m = 1;;) {
 int g = max(1, min(ENSEMBLE_PIPE_GCAP, poolD / m));
@@ -813,6 +844,93 @@ bestM = softM;
 mDesign = bestM;
 pipeStagger = true;
 }
+}
+} else {
+const int hi = min(4096, max(1, M_EFF));
+const int poolD =
+(int)BK[B_ACT].size() + (int)BK[B_FRESH].size() + nDecFlight;
+if (!prefillWantsEdge && !(DBASE <= 0 && WC > 1e-9))
+historicalGAllow = ENSEMBLE_PIPE_GCAP;
+double best = -1, bestSoft = -1e300;
+int mSoft = 1;
+double ncUB = DBASE > 0 ? max(0.0, 1.0 - exTdr / DBASE) : 1.0;
+double exAtUB = max(0.0, (gapPredict(hi) - SLO2) / SLO2);
+bool tpotPossible = WC > 1e-9 && exAtUB > TPOT_DOM * exTdr &&
+!historicalTdrDominated && WC * ncUB >= WTP * historicalNtpCeil;
+if (historicalGAllow == 1 || tpotPossible) {
+for (int m = 1;;) {
+double soft = 0, value = objective(m, exTdr, &soft);
+if (value >= best - 1e-12) {
+best = max(best, value);
+mDesign = m;
+}
+if (soft > bestSoft) {
+bestSoft = soft;
+mSoft = m;
+}
+if (m >= hi) break;
+m = min(hi, m + max(1, m / 8));
+}
+if (best <= 1e-12) mDesign = mSoft;
+double exAt = max(0.0, (gapPredict(mDesign) - SLO2) / SLO2);
+double dAt = sqrt(exTdr * exTdr + exAt * exAt);
+double ncAt = DBASE > 0 ? max(0.0, 1.0 - dAt / DBASE)
+: (dAt <= 1e-12 ? 1.0 : 0.0);
+tpotBound = tpotPossible && exAt > TPOT_DOM * exTdr &&
+WC * ncAt >= WTP * historicalNtpCeil;
+if (tpotBound) historicalGAllow = 1;
+}
+if (historicalGAllow > 1) {
+vector<int> cM;
+vector<double> cR, cV, cS;
+double bestRate = 0;
+best = -1;
+bestSoft = -1e300;
+mSoft = 1;
+for (int m = 1;;) {
+int g = max(1, min(historicalGAllow, poolD / m));
+double rate = 0, soft = 0;
+double value = pipedObjective(m, g, exTdr, &rate, nullptr, &soft);
+bestRate = max(bestRate, rate);
+cM.push_back(m);
+cR.push_back(rate);
+cV.push_back(value);
+cS.push_back(soft);
+if (m >= hi) break;
+m = min(hi, m + max(1, m / 8));
+}
+for (size_t i = 0; i < cM.size(); ++i) {
+if (cR[i] + 1e-12 >= THR_FLOOR * bestRate) {
+if (cV[i] >= best - 1e-12) {
+best = max(best, cV[i]);
+mDesign = cM[i];
+}
+if (cS[i] > bestSoft) {
+bestSoft = cS[i];
+mSoft = cM[i];
+}
+}
+}
+if (best <= 1e-12) mDesign = mSoft;
+pipeStagger = true;
+} else {
+if (WTP > 1e-9 && !tpotBound)
+mDesign = max(mDesign, min(hi, M_FLOOR));
+if (DBASE <= 0 && WC > 1e-9 && gapPredict(1) <= SLO2) {
+int cap = 1;
+for (int m = 1; m <= hi; ++m) {
+if (gapPredict(m) <= SLO2) cap = m;
+else break;
+}
+mDesign = min(mDesign, cap);
+}
+}
+double dNow = sqrt(exTdr * exTdr + exTpot * exTpot);
+double ncNow = DBASE > 0 ? max(0.0, 1.0 - dNow / DBASE)
+: (dNow <= 1e-12 ? 1.0 : 0.0);
+tdrBound = !tpotBound && WC > 1e-9 && nPrefPend > 0 &&
+exTdr > TPOT_DOM * exTpot && ncNow > 0 &&
+WC * ncNow >= WTP * historicalNtpCeil;
 }
 int nAssigned = 0;
 ANS.clear();
@@ -1050,12 +1168,20 @@ bool yieldDec = tdrBound && (!BK[B_PPOST].empty() || !BK[B_ARR].empty());
 bool waitSingleFlightPost =
 singleFlightDecode && decodeRoundsInFlight > 0 &&
 (int)BK[B_DPOST].size() < decodeFlightMembers;
+bool edgeBoundIn = edgeW * (double)K >= cloudW && edgeW >= linkW;
+bool historicalHoldDpost =
+(decDown > 0 || decProcRun > 0) && historicalGAllow <= 1 &&
+WTP >= POST_HOLD_WTP &&
+(LAT > POST_LAT_RATIO * (S + tDpost.get(1)) ||
+(edgeBoundIn && prefillWantsEdge)) &&
+!(DBASE <= 0 && WC > 1e-9);
 bool holdDpost =
 edgeFree && !BK[B_DPOST].empty() &&
 (waitSingleFlightPost ||
+((historical22Mode ? historicalHoldDpost :
 ((decDown > 0 || decProcRun > 0) && WTP >= POST_HOLD_WTP &&
 LAT > POST_LAT_RATIO * (S + tDpost.get(1)) &&
-!(DBASE <= 0 && WC > 1e-9)));
+!(DBASE <= 0 && WC > 1e-9)))));
 if (edgeFree && !BK[B_DPOST].empty() && !holdDpost && !yieldDec) {
 batch = BK[B_DPOST];
 sort(batch.begin(), batch.end());
@@ -1095,7 +1221,15 @@ bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) || yie
 bool fire = false;
 if ((haveAct || haveFresh) && !holdStart &&
 (!singleFlightDecode || decodeRoundsInFlight == 0)) {
-if (!havePrefill) {
+if (historical22Mode && ready >= mDesign) {
+fire = true;
+} else if (historical22Mode && !havePrefill) {
+bool linkBoundIn = linkW >= edgeW && linkW * (double)K >= cloudW;
+bool sync = latShare(ready) >= FRAG_LAT_SHARE ||
+(nPrefPend > 0 && linkBoundIn && WTP >= .3 &&
+!(DBASE <= 0 && WC > 1e-9));
+fire = nDecFlight == 0 || !sync;
+} else if (!historical22Mode && !havePrefill) {
 fire = true;
 } else if (ready >= mDesign) {
 fire = true;
@@ -1139,7 +1273,9 @@ i >= 0 && room > 0; --i, --room)
 batch.push_back(BK[B_FRESH][i]);
 } else {
 for (int rid : BK[B_ACT]) batch.push_back(rid);
-int room = mDesign - (recover17 ? nActive : nCohort);
+int room = mDesign -
+(historical22Mode ? (historicalTdrDominated ? nActive : nCohort)
+: (recover17 ? nActive : nCohort));
 for (int i = (int)BK[B_FRESH].size() - 1;
 i >= 0 && room > 0; --i, --room)
 batch.push_back(BK[B_FRESH][i]);
@@ -1209,16 +1345,26 @@ qArr.pop();
 break;
 }
 if (best < 0) best = BK[B_ARR].back();
+int kuse = K;
+if (historical22Mode && K > 1 && feedW > 0) {
+int need = max(1, (int)ceil(cloudW / feedW * KUSE_MARGIN));
+if (need < K) {
+double saved = 2.0 * (K - need) * LAT;
+double added = tDproc.get(ceil((double)M_EFF / need)) -
+tDproc.get(ceil((double)M_EFF / K));
+if (saved > added) kuse = need;
+}
+}
 int c = 0;
 double bl = 1e300;
 bool avoidDec = tpotBound;
 if (avoidDec) {
 bool any = false;
-for (int i = 0; i < K; ++i)
+for (int i = 0; i < kuse; ++i)
 if (!nJoinC[i]) any = true;
 avoidDec = any;
 }
-for (int i = 0; i < K; ++i) {
+for (int i = 0; i < kuse; ++i) {
 if (avoidDec && nJoinC[i]) continue;
 double preLoad;
 if (WTP <= PREFILL_WORKLOAD_WTP + 1e-12) {
