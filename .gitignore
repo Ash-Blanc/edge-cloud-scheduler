@@ -3,3 +3,5 @@ sched
 a.out
 __pycache__/
 *.pyc
+config.bat
+node_modules
