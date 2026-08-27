@@ -1,25 +1,24 @@
-SHIP — per-cloud decode tail on AKD .80/.90 (PROBE)
-====================================================
+SUBMIT this solution.cpp — isolated CLOUDTAIL A/B (not 16.8k)
+============================================================
 
-Main stays unpushed. This branch ships solution.cpp with
-AKD56_CLOUDTAIL=1 // PROBE. Do not push main. No PRs.
-
+grep: #define AKD56_CLOUDTAIL 1 // PROBE per-cloud decode tail after prefill
 hash-object: b2463779df88b9726791f7c4c8d2254780c5d3db
-Baseline blob: 3317974884a412f8ab0deb84f544e77e89149ffa / d202b1a / 16041.088
 
-Gate: wEq(WTP,.80)||wEq(WTP,.90). Event-trace IDENTICAL on retargeted
-.05/.15/.25/.30/.75/.98/.99/1.0, #3 lat-only-K4, #17, #22, tp-sat-K8.
-Flags-off MATCH vs d202b1a on honest #5/#6.
+Submit this solution.cpp.
 
-Expected movement: official #5 and #6 only.
+Not main blob 3317974884a412f8ab0deb84f544e77e89149ffa (d202b1a).
+CLOUDTAIL sits on d202b1a+flag only. Pairing / k-shrink-as-submitted /
+tail-LPT are not mixed in as extra official-A/B'd losers. Do not push
+main. Do not merge pairing/k-shrink.
 
-Honest k-shrink-identical recons (7ef0c2f6 IDENTICAL, SAT_TP fires):
+Expected: ONLY official #5 and #6 move; tp up, tdr same, tpot down.
+If any other test moves or #5/#6 drop: revert to 33179748.
+
+Local translation ~+34 #5 +~10 #6; official may differ; this is not
+16.8k, it's an isolated A/B.
+
+Honest k-shrink-identical recons (local, not official):
 - #5 seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5
-  +34.47 pts  ntp +0.0431  tp +12.70%  tdr 0%  tpot -17.10%  nc=0.998
+  +34.47 pts  ntp +0.0431  tp +12.70%  tdr 0%  tpot -17.10%
 - #6 seed=812 R=150 L=36 pp=160 span=4 bw=11 lat=4.4
-  +9.60 pts   ntp +0.0107  tp +3.21%   tdr 0%  tpot -12.38%  nc=0.992
-
-Not STREAM: first D PRE still 26/63 (take-all FRESH); nc holds; tp up
-not -14/-79. Not PART2: inflight 6–7 clouds of size ~R/K, not two
-wait-all waves of K/2. Adjacent CLOUDPRE (global D POST) was tiny
-(+2.1/+1.5) and is not shipped.
+  +9.60 pts   ntp +0.0107  tp +3.21%   tdr 0%  tpot -12.38%
