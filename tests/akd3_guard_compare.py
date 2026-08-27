@@ -173,7 +173,7 @@ def main():
         cand = traced_run(candidate, case)
         if akd3_mode(case) or any(
             abs(case.wtp - w) <= 1e-6
-            for w in (0.05, 0.15, 0.25, 0.30, 0.75, 0.80, 0.90, 0.98)
+            for w in (0.25, 0.30, 0.75, 0.80, 0.90, 0.98)
         ):
             ref = traced_run(akd, case)
             lineage = "akd"

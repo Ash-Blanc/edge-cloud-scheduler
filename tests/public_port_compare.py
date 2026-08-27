@@ -71,7 +71,10 @@ def main():
 
     failures = 0
     for case in cases:
-        if public_weight(case.wtp) or akd3_case(case):
+        if akd3_case(case):
+            reference = public
+            lineage = "public"
+        elif public_weight(case.wtp) and abs(case.wtp - 0.05) > 1e-6 and abs(case.wtp - 0.15) > 1e-6:
             reference = public
             lineage = "public"
         elif abs(case.wtp - 0.5) <= 1e-6 and case.name != "official22-pipeline":

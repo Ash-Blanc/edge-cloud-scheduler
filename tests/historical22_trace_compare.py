@@ -96,8 +96,16 @@ def main():
     cases = sim.build_cases()
     for case in cases:
         sim.calibrate(case, "/tmp/ref_sequential")
-    checked = matched_mode = 0
+    checked = matched_mode = skipped = 0
     for case in cases:
+        pure = case.wtp <= 1e-6 and case.wc >= 1.0 - 1e-6
+        dbase = case.dist_base
+        akd3 = pure and (
+            (dbase > 0 and dbase < 2.5) or (dbase <= 0 and case.slo1 > 100)
+        )
+        if akd3:
+            skipped += 1
+            continue
         mode = abs(case.wtp - .5) <= 1e-6 and predicted_peak(case) > 1.0
         expected = traced_run(historical if mode else baseline, case)
         actual = traced_run(candidate, case)
@@ -110,6 +118,7 @@ def main():
             checked += 1
     print(f"in mode: all {matched_mode} suite traces match 254398e")
     print(f"outside mode: all {checked} suite traces match 1fd1caa")
+    print(f"skipped akd3: {skipped}")
 
 
 if __name__ == "__main__":
