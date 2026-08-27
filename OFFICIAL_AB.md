@@ -213,3 +213,34 @@ SJF is already the optimal order on a single FIFO with the backlog present (span
 **BAN addendum:** do not ship pairing, colloc D PRE, or wait-for-2 on `.75`. They are the k=1 LAT family whose local +170–220 is the official pairing fail mode. Do not ship SJF/JSQ on `.75` as a #13 ntp play.
 
 **Next experiment:** do not chase #13 ntp on the LAT-bound recon (pairing proved official tp is invariant to k=1). Prefer a unique-weight remaining that is not an AKD public clone: **#14** (`w=0.65`, L_out=2 single-chain floor — confirm nothing left) or **#10** TDR beyond last-256 LPT (nc remaining ~315; official tail-LPT already no-op). Do not re-run pairing/colloc/wait-2/SJF-as-ntp/#12-tpotBound.
+
+## #10 TDR — edge SPT floor, no-gain, not shipped
+
+**Date:** 2026-08-27. Branch `cursor/akd10-tdr-recon-f905`. `solution.cpp` remains main blob `3317974884a412f8ab0deb84f544e77e89149ffa`. **Do not submit.**
+
+Official #10: 684.426 tp=0.007628 tdr=182521.13 tpot=86.987 dist=143.983 ntp=0.994 nc=0.630 WTP=.15. Remaining ~316 = wait. Dual-sub: remaining almost all wait. Last-256 LPT official no-op.
+
+### Fitted recon (d202b1a within a few %)
+
+Homogeneous `Lin=128`, `L_out∈{1,2}`, K=2 R=2000 lat=1 bw=10 S=2, P PRE(128)=180, decode scaled for TPOT≈87. See `docs/akd10-recon.md` / `tests/official10_recon.py`.
+
+| | tp | tdr | tpot |
+|---|---|---|---|
+| official | 0.007628 | 182521 | 86.987 |
+| d202b1a seed-1009 | 0.007862 (**+3.1%**) | 189554 (**+3.9%**) | 85.737 (**−1.4%**) |
+
+The old R=2000 mixed-length probes (TDR ~32k, tp ~0.13) were unfitted. They are why tail-LPT looked like slack and then official no-op'd.
+
+### Honest floor
+
+TDR is 99.9% P PRE queue; uplink/P PROC/downlink queues are 0. Edge SPT of `(P PRE + P POST)` is the single-machine mean-completion bound:
+
+```
+TDR/edge_spt = 1.0009  (0.09% slack)
+```
+
+SPT is already optimal on that edge. 0.09% of official TDR is <0.3 pts. Isolated `wEq(WTP,.15)` JSQ-P-PROC and chain-key=P PRE+P POST are IDENTICAL. Tail-LPT vs SPT is TDR-identical (homogeneous tail after SPT drains shorts) — that is the official no-op. Guards: retarget `.75/.80/.90/.30/.98/.99/1` plus #3/#17/#22 IDENTICAL.
+
+**BAN addendum:** do not A/B another last-N LPT or JSQ-on-.15. Do not chase **#9** (`w=0.05`): same `publicTdrMode`, same single-resource SPT floor.
+
+**Next:** **#8** (`w=0.25`, remaining ~167, already fitted; k-shrink banned). Not #9, not #10, not the closed floors (#4/#5/#6/#12/#13-ntp/#14/#15/#17/#18).

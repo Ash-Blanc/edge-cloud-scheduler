@@ -1,21 +1,26 @@
-NO SUBMIT — #13 TDR levers no-gain (SJF tiny; pairing family fake)
-==================================================================
+NO SUBMIT — #10 is an edge-SPT floor (0.09% slack)
+===================================================
 
 Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
 Score 16041.088. Do not push main. Do not soup failed probes.
+solution.cpp unchanged (no PROBE).
 
-OFFICIAL NO-OPS (do not resubmit)
+OFFICIAL NO-OPS / FLOORS (do not resubmit)
 - pairing .75 blob 0c00047f… LOST 16040.404. BAN.
 - k-shrink .80/.90 blob 7ef0c2f6… NO-OP 16041. BAN k-shrink-with-prefill-floor
   on .25/.30/.80/.90.
 - k-shrink .30 blob 603e4d32… NO-OP 16041 #4 identical. Same k=K story.
 - tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. Last-256 LPT never mattered
   on official #9/#10. BAN last-N LPT of that path.
+- #14 L_out=2 single-chain floor. #15/#17/#18 fitted floors. #12 tpotBound ≤6.
+- #13 ntp on LAT-bound recon: pairing fake, SJF tiny.
+- **#10 edge SPT floor (this round).** Fitted recon matches official
+  tp/tdr/tpot within 4%. TDR/edge_spt=1.0009. JSQ-.15 and chain-key
+  IDENTICAL. Do not chase #9 (same publicTdrMode floor).
 
-This round: #13 wEq(.75) without pairing. AKD traces: TDR is 65% uplink HOL,
-P PROC/P POST queues already empty. P POST-first / P PRE-before-D POST /
-SPT P PROC IDENTICAL. JSQ-spread TDR not down. SJF +7–12 local (~+7 official
-from pairing’s −0.032 pts/TDR). Tiny, not shipped. Colloc/wait-2 still the
-fake k=1 LAT family. solution.cpp stays the known-good main blob (no PROBE).
-#12 tpotBound still ≤6. Next: not #13 ntp on the LAT-bound recon.
-Prefer #14 (w=0.65 L_out=2 floor check) or #10 TDR beyond last-256 LPT.
+This round: fitted official #10 (K=2 R=2000 Lin=128 L_out∈{1,2} P PRE=180).
+d202b1a tp=+3.1% tdr=+3.9% tpot=−1.4%. 99.9% of TDR is P PRE queue.
+Honest LB is SPT on the single edge doing P PRE+P POST. 0.09% slack <0.3 pts.
+Tail-LPT no-op = homogeneous long tail after SPT. See docs/akd10-recon.md.
+
+Next: #8 w=0.25 remaining ~167 (fitted; not k-shrink). Not #9/#10/#14.
