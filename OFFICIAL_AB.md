@@ -171,3 +171,45 @@ JSQ +14–18 pts appeared only on **wrong-tpot** prefill-bound fits (tpot ~16–
 `.15` JSQ assign (not last-256 LPT): traces DIFF, TDR/pts **0.00%** on mixed #10-like R=300–2000. TDR-split P PROC (SRPT-like, `.05/.15`): no-gain / slight tp loss. Official #10 tdr=182k was not triple-fitted; local mixed probes already sit on the SPT chain.
 
 **Next experiment:** fitted **#13** (`w=0.75`, tp=0.0267, ~278 pts) with a lever that is **not pairing**. Else **#12 nc-cliff** if a tpotBound change can beat the unshipped ≤6 pt local. Do not re-run JSQ/k-shrink/tail-LPT/D-POST-overlap.
+
+## #13 TDR levers without pairing — no-gain, not shipped
+
+**Date:** 2026-08-27. Branch `cursor/akd13-tdr-spread-8152`. `solution.cpp` remains main blob `3317974884a412f8ab0deb84f544e77e89149ffa`. **Do not submit.**
+
+Official #13: 722.457 tp=0.026744 tdr=1669.941 tpot=71.638 ntp=0.681 nc=0.847 remaining ~278 = 239 ntp + 38 nc. Pairing official: tp identical, tdr 1669.9→1691.6 (−0.684). Sensitivity ≈ **−0.032 pts per TDR unit**.
+
+### AKD traces on the fitted recon (K=4 lat=18.5 R=26 L_out=70 pproc=9 seed=91)
+
+d202b1a: tp=0.02677 tdr=1516 tpot=71.68 m~=1.92 (metrics match). Sequential tp=0.01869 = **2.45×** official tp_base (same fake-ntp scale as pairing). D PRE 911 rounds, 909 of size 2.
+
+TDR decomposition (mean / queue share):
+
+| stage | mean | service | queue | % of TDR |
+|---|---|---|---|---|
+| P PRE | 176 | 14 | 162 | 11% |
+| **uplink** | **1074** | **92** | **982** | **65%** |
+| P PROC | 101 | 101 | **0** | 0% |
+| downlink | 157 | 92 | 65 | 4% |
+| P POST | 9 | 8 | **0.8** | 0.1% |
+
+Uplink HOL is the TDR story. P PROC is already empty under RR. P POST vs D POST never conflicts.
+
+Pairing vs base on the same traces: P PRE/uplink queues **unchanged**; P PROC queue +23 and downlink +32 (pack). Local tp 0.0268→0.035 (fake k=1 LAT). Official tp identical ⇒ official is **not** k*LAT bound. Search for a recon that matches official tp/tdr/tpot **and** pairing’s official signature (Δtp≈0, TDR up): **empty**. Low-LAT / proc-bound shapes that kill pairing’s tp win have TDR 600–800, not 1670.
+
+### Isolated `wEq(WTP,.75)` probes (other weights trace-identical)
+
+| idea | fitted #13 (5 seeds) | argument |
+|---|---|---|
+| P POST before D POST | **IDENTICAL** | P POST queue 0.8; no conflict |
+| P PRE before D POST | **IDENTICAL** | all 26 P PREs already finish before first D PRE |
+| SPT P PROC | **IDENTICAL** | P PROC queue already 0 |
+| JSQ remaining P PROC at P PRE (spread) | +0 to +13; TDR **not down**; tiny Δtp 0–0.0005 | anti-pairing that does not cut the uplink 65%; tp bump is the untrustworthy family |
+| SJF / chain-SPT P PRE | **+7 to +12**; TDR −210 to −387; tpot sometimes 72→80–86 | physically forced uplink interchange; official-scale ≈ 210×0.032 ≈ **+7 pts**. Tiny. Skip. |
+
+SJF is already the optimal order on a single FIFO with the backlog present (span=10 vs uplink ~1250). Mean uplink wait 982 vs equal-job bound (n−1)/2 × 92 ≈ 1150; SJF is the remaining size-variation cut. Cannot beat it without a second uplink.
+
+#12 fallback not reopened: prior tpotBound +0.79 / official cap ≤6.
+
+**BAN addendum:** do not ship pairing, colloc D PRE, or wait-for-2 on `.75`. They are the k=1 LAT family whose local +170–220 is the official pairing fail mode. Do not ship SJF/JSQ on `.75` as a #13 ntp play.
+
+**Next experiment:** do not chase #13 ntp on the LAT-bound recon (pairing proved official tp is invariant to k=1). Prefer a unique-weight remaining that is not an AKD public clone: **#14** (`w=0.65`, L_out=2 single-chain floor — confirm nothing left) or **#10** TDR beyond last-256 LPT (nc remaining ~315; official tail-LPT already no-op). Do not re-run pairing/colloc/wait-2/SJF-as-ntp/#12-tpotBound.

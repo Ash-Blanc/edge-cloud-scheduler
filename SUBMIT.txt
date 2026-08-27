@@ -1,4 +1,4 @@
-NO SUBMIT — tail-LPT official no-op; prefill/P PROC probes no-gain
+NO SUBMIT — #13 TDR levers no-gain (SJF tiny; pairing family fake)
 ==================================================================
 
 Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
@@ -12,10 +12,10 @@ OFFICIAL NO-OPS (do not resubmit)
 - tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. Last-256 LPT never mattered
   on official #9/#10. BAN last-N LPT of that path.
 
-This round: JSQ / D-PROC-first / early D PRE / P PROC split / .15 JSQ
-on a prefill-bound #5 recon with official-like tp/tpot. Tiny or wrong-shape
-only. solution.cpp stays the known-good main blob (no PROBE comment).
-If a later commit stages a probe, it MUST have a unique first-line
-  // PROBE <name> blob=...
-and this file must name the expected tests plus the revert blob
-3317974884a412f8ab0deb84f544e77e89149ffa.
+This round: #13 wEq(.75) without pairing. AKD traces: TDR is 65% uplink HOL,
+P PROC/P POST queues already empty. P POST-first / P PRE-before-D POST /
+SPT P PROC IDENTICAL. JSQ-spread TDR not down. SJF +7–12 local (~+7 official
+from pairing’s −0.032 pts/TDR). Tiny, not shipped. Colloc/wait-2 still the
+fake k=1 LAT family. solution.cpp stays the known-good main blob (no PROBE).
+#12 tpotBound still ≤6. Next: not #13 ntp on the LAT-bound recon.
+Prefer #14 (w=0.65 L_out=2 floor check) or #10 TDR beyond last-256 LPT.
