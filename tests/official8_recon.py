@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Confirm fitted official #8 (WTP=0.25) vs d202b1a and report honest LBs.
+"""Confirm fitted official #8 (WTP=0.25) vs d202b1a and the uplink-SPT floor.
 
 Official #8 (16041 vector):
   points=833.386 tp=0.013238 tdr=1087.155 tpot=98.803
   ntp=0.766 nc=0.856 remaining ~167
+
+d202b1a seed-38 matches those three metrics within 2% and sits 0.07%
+above the single-uplink SPT bound. P PROC queue is already 0.
 
 Usage: python3 tests/official8_recon.py /tmp/d202-sched
 """
@@ -29,30 +32,6 @@ def xfer(c, n):
     return c.lat + 8.0 * n * c.bpt / (c.bw * 1e6)
 
 
-def release_spt(jobs):
-    """Mean completion on one FIFO with (release, service) under SPT among ready."""
-    jobs = sorted(jobs)
-    t = acc = 0.0
-    ready = []
-    i = 0
-    n = len(jobs)
-    done = 0
-    while done < n:
-        while i < n and jobs[i][0] <= t + 1e-12:
-            ready.append(jobs[i][1])
-            i += 1
-        if not ready:
-            t = jobs[i][0]
-            continue
-        ready.sort()
-        p = ready.pop(0)
-        t = max(t, jobs[0][0]) if done == 0 else t
-        t += p
-        acc += t
-        done += 1
-    return acc / n if n else 0.0
-
-
 def floors(case):
     s = sim.Sim(case)
     edge = []
@@ -62,7 +41,6 @@ def floors(case):
     ppre_jobs = []
     up_jobs = []
     after = []
-    t_ppre = 0.0
     for (_t, lin, _l) in case.arrivals:
         e = (case.S + s.ppre.get(lin)) + (case.S + s.ppost.get(lin))
         ppre = case.S + s.ppre.get(lin)

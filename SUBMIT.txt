@@ -1,4 +1,4 @@
-NO SUBMIT — #10 is an edge-SPT floor (0.09% slack)
+NO SUBMIT — #8 is an uplink-SPT floor (0.07% slack)
 ===================================================
 
 Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
@@ -10,17 +10,21 @@ OFFICIAL NO-OPS / FLOORS (do not resubmit)
 - k-shrink .80/.90 blob 7ef0c2f6… NO-OP 16041. BAN k-shrink-with-prefill-floor
   on .25/.30/.80/.90.
 - k-shrink .30 blob 603e4d32… NO-OP 16041 #4 identical. Same k=K story.
-- tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. Last-256 LPT never mattered
-  on official #9/#10. BAN last-N LPT of that path.
+- tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. BAN last-N LPT of that path.
 - #14 L_out=2 single-chain floor. #15/#17/#18 fitted floors. #12 tpotBound ≤6.
 - #13 ntp on LAT-bound recon: pairing fake, SJF tiny.
-- **#10 edge SPT floor (this round).** Fitted recon matches official
-  tp/tdr/tpot within 4%. TDR/edge_spt=1.0009. JSQ-.15 and chain-key
-  IDENTICAL. Do not chase #9 (same publicTdrMode floor).
+- #10 edge SPT floor. Do not chase #9 (same publicTdrMode floor).
+- **#8 uplink SPT floor (this round).** Fitted recon matches official
+  tp/tdr/tpot within 2%. TDR/SPT=1.0007. P PROC queue 0. Isolated .25
+  fullbatch/interleave/PPROC-SPT IDENTICAL; tpbatch −25; wait-all +2 tiny
+  and tpot mismatch. Do not ship.
 
-This round: fitted official #10 (K=2 R=2000 Lin=128 L_out∈{1,2} P PRE=180).
-d202b1a tp=+3.1% tdr=+3.9% tpot=−1.4%. 99.9% of TDR is P PRE queue.
-Honest LB is SPT on the single edge doing P PRE+P POST. 0.09% slack <0.3 pts.
-Tail-LPT no-op = homogeneous long tail after SPT. See docs/akd10-recon.md.
+This round: fitted official #8 (K=4 R=18 L_out=2 lat=14). d202b1a
+tp=−0.4% tdr=+0.5% tpot=−1.1%. 76% of TDR is uplink HOL. Honest LB is
+SPT on the single uplink. 0.07% slack <0.2 pts. See docs/akd8-recon.md.
 
-Next: #8 w=0.25 remaining ~167 (fitted; not k-shrink). Not #9/#10/#14.
+16.5k BLOCKED. Need ~459. Closed floors plus #8 cannot supply it.
+#5+#6 remaining ~1144 is ntp vs decode-only tp_UB but official-binding
+probes have not moved them (prefill k=K). Stop until an official-unknown
+#5/#6 lever exists that is not k-shrink/JSQ/overlap/maximal-ready and
+that differs on a prefill-bound + official tp-matched recon.

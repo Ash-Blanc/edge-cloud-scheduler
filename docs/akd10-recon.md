@@ -79,7 +79,6 @@ on both fitted shapes. BAN last-N LPT stands.
 JSQ cannot help: P PROC queue is already 0. Reweighting the chain key cannot
 help: every component is monotone in Lin, so the order is the same.
 
-**No submission.** Next leftover that is not this floor: **#8** (`w=0.25`,
-remaining ~167, already fitted; k-shrink banned). Do **not** chase **#9**
-(`w=0.05`): same `publicTdrMode`, same single-resource SPT floor (edge or
-uplink). Closed: #4/#5/#6/#12/#13-ntp/#14/#15/#17/#18 and this #10.
+**No submission.** #8 (`w=0.25`) is an uplink-SPT floor (TDR/SPT=1.0007).
+16.5k is blocked without an official-unknown #5/#6 lever. Closed: #4/#5/#6/
+#8/#9/#10/#12/#13-ntp/#14/#15/#17/#18.

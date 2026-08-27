@@ -243,4 +243,68 @@ SPT is already optimal on that edge. 0.09% of official TDR is <0.3 pts. Isolated
 
 **BAN addendum:** do not A/B another last-N LPT or JSQ-on-.15. Do not chase **#9** (`w=0.05`): same `publicTdrMode`, same single-resource SPT floor.
 
-**Next:** **#8** (`w=0.25`, remaining ~167, already fitted; k-shrink banned). Not #9, not #10, not the closed floors (#4/#5/#6/#12/#13-ntp/#14/#15/#17/#18).
+## #8 TDR — uplink SPT floor, no-gain, not shipped
+
+**Date:** 2026-08-27. Branch `cursor/akd8-new-lever-683a`. `solution.cpp`
+remains main blob `3317974884a412f8ab0deb84f544e77e89149ffa`. **Do not submit.**
+
+Official #8: 833.386 tp=0.013238 tdr=1087.155 tpot=98.803 ntp=0.766 nc=0.856
+WTP=.25. Remaining ~167 = 59 ntp + 108 nc. Dist is the TDR excess.
+
+### Fitted recon (d202b1a within 2%)
+
+K=4 R=18 `L_out=2` lat=14 bw=1.5 dproc=9 pproc=15 seed=38. See
+`docs/akd8-recon.md` / `tests/official8_recon.py`.
+
+| | tp | tdr | tpot |
+|---|---|---|---|
+| official | 0.013238 | 1087.155 | 98.803 |
+| d202b1a seed-38 | 0.013186 (**−0.4%**) | 1092.4 (**+0.5%**) | 97.70 (**−1.1%**) |
+
+TDR decomposition: **76% uplink HOL**, P PROC queue **0**, P POST queue 0.
+Uplink-SPT + remaining service: **TDR/SPT=1.0007 (0.07% slack)**. Previous
+SJF/JSQ=0 is this floor. Makespan `x1.23` of uplink-prefill work is decode
+after input (`need=1/4`, LAT-bound). Same family as official-no-op k-shrink.
+
+### Isolated `wEq(WTP,.25)` probes (other weights trace-identical)
+
+| idea | fitted seed-38 | argument |
+|---|---|---|
+| P PROC SPT | IDENTICAL | P PROC queue already 0 |
+| full-ready D PRE | IDENTICAL | efficiency prefix already 9-of-ready |
+| D PRE while ARR remains | IDENTICAL | all-at-0 input-first already drains ARR |
+| throughput-max prefix | **−25** | smaller rounds, tp down |
+| wait-all-prefill then D PRE | **+2.2** tiny; tpot 97.7→91.5 | official tpot match worse; decode-tail family |
+
+Default flags-off binary IDENTICAL to `d202b1a`. Tiny not shipped. Do not
+official-A/B wait-all or another k-shrink cousin.
+
+**BAN addendum:** #8 TDR is an uplink-SPT floor. Do not re-A/B SJF/JSQ/pair-2/
+k-shrink/wait-all/fullbatch on `.25`.
+
+## 16.5k status — blocked without an official-unknown #5/#6 lever
+
+Need ~459 (16500−16041). Closed unique-weight remainder cannot supply it:
+
+- **#8** uplink-SPT floor; ntp leftover is the LAT-bound decode tail that
+  official k-shrink no-op'd on #4/#5/#6.
+- **#9/#10** edge/uplink SPT floors (official tail-LPT no-op).
+- **#4** k-shrink official no-op (prefill `k=K`).
+- **#12** tpotBound cap ≤6. **#13** pairing official loss; SJF ~+7 not shipped.
+- **#14** L_out=2 physical chain. **#15/#17/#18** fitted floors.
+- **#5+#6** remaining ~1144 is ntp vs decode-only `tp_UB`, but official is
+  prefill-bound (`k=K`). Every official-binding probe (k-shrink, JSQ-P-PROC,
+  overlap, maximal-ready, P PRE/P PROC LPT, D PRE-while-ARR, CHUNK) no-op'd,
+  lost, or only won on the **wrong shape** (tp 20× too small or tdr 18% high).
+  No candidate is simultaneously prefill-bound, official tp/tdr/tpot-matched
+  within ~1%, trace-different, and a win.
+
+Leftover unfitted unique weights (#1/#2/#7/#11/#16/#19/#21/#22) are not a
+plan: #7 shares WTP=0 with #3; #11 TDR~3e7 is an nc=0 backlog; #16/#20/#22
+are already >955. Fitting another untrusted shape is the tail-LPT/#4-k-shrink
+failure mode.
+
+**Stop.** 16.5k is blocked until someone finds a #5/#6 lever that is **not**
+k-shrink / JSQ / D-POST-overlap / maximal-ready **and** that differs on a
+recon that is **prefill-bound (`kuse=K`) and official-tp-matched**. That
+recon has not been found.
