@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """A/B reconstructed 16063 vs d202b1a, and gated variants.
 
-Honest recons (k-shrink-identical):
+Honest recons (k-shrink-identical ABSOLUTE metrics of d202b1a):
   #5 seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5
+     MATCHES official BEFORE tp/tdr/tpot, but gated 5d830a0b is IDENTICAL
+     to d202b1a — does NOT reproduce official +0.092 tp. Thrown out as a
+     ranking recon for skipP+mDesign-cap. Mechanism that does fire: same
+     shape with quadratic D PRE q=3e-4 (efficiency 64 → cap 100, TDR same,
+     +55% tp). That magnitude is not the official +8%.
   #6 seed=812 R=150 L=36 pp=160 span=4 bw=11 lat=4.4
+     ungated 16063 IDENTICAL to d202b1a (official no-op on #6).
 """
 from __future__ import annotations
 
