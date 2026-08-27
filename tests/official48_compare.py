@@ -54,31 +54,33 @@ def extra_shapes(test):
     return out
 
 
+def retarget(case, wtp, name):
+    import copy
+    c = copy.deepcopy(case)
+    c.wtp = wtp
+    c.wc = 1.0 - wtp
+    c.name = name
+    return c
+
+
 def other_weight_cases():
     """Weights that must stay byte-identical to d202b1a."""
-    from official_cohort_sweep import official5, official6, official13, pin_official_constants
     out = []
-    c = official5(seed=702)
-    pin_official_constants(c, 5)
-    out.append(("w.80-#5", c))
-    c = official6(seed=802)
-    pin_official_constants(c, 6)
-    out.append(("w.90-#6", c))
-    c = official13(seed=1301)
-    pin_official_constants(c, 13)
-    out.append(("w.75-#13", c))
-    # local suite cases at protected weights
-    by = {c.name: c for c in sim.build_cases()}
-    for name, w in (
-        ("lat-heavy-K8", 0.05),
-        ("lat-mid-K4", 0.15),
-        ("tp-sat-K4", 0.98),
-        ("tp-sat-K8", 1.00),
-        ("hi-lat-K4", 0.65),
+    fit4 = fitted4()
+    fit8 = fitted8()
+    for w, tag in (
+        (0.05, "w.05"), (0.15, "w.15"), (0.75, "w.75"),
+        (0.80, "w.80"), (0.90, "w.90"), (0.98, "w.98"),
+        (0.99, "w.99"), (1.00, "w1.0"), (0.67, "w.67"), (0.50, "w.50"),
     ):
+        out.append((f"fit4-{tag}", retarget(fit4, w, f"fit4-{tag}")))
+        out.append((f"fit8-{tag}", retarget(fit8, w, f"fit8-{tag}")))
+    by = {c.name: c for c in sim.build_cases()}
+    for name in ("lat-heavy-K8", "lat-mid-K4", "tp-sat-K4", "tp-sat-K8",
+                 "hi-lat-K4", "lat-only-K4"):
         case = by[name]
         sim.calibrate(case, "/tmp/ref_sequential")
-        out.append((f"{name}-w{w:.2f}", case))
+        out.append((name, case))
     out.append(("test17", test17_case()))
     out.append(("test22", test22_case()))
     return out

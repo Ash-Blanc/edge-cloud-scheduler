@@ -213,7 +213,7 @@ ST_FIN
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
 #ifndef AKD4_KSHRINK
-#define AKD4_KSHRINK 0
+#define AKD4_KSHRINK 1
 #endif
 #ifndef AKD4_PAIR
 #define AKD4_PAIR 0
