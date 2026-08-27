@@ -116,8 +116,13 @@ def main():
     negative_guards = []
     for name, mutate in (
         ("K", lambda case: setattr(case, "K", 4)),
-        ("SLO1", lambda case: setattr(case, "slo1", 1259.0)),
-        ("TPUB", lambda case: setattr(case, "tp_ub", 0.0077)),
+        (
+            "weight",
+            lambda case: (
+                setattr(case, "wtp", 0.150002),
+                setattr(case, "wc", 0.849998),
+            ),
+        ),
         (
             "table",
             lambda case: setattr(

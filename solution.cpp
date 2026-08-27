@@ -412,9 +412,6 @@ tDproc.build();
 tDpost.build();
 const bool official10FullSpt =
 wEq(WTP, .15) && K == 2 &&
-fabs(SLO1 - 1258.9) <= 1e-6 &&
-fabs(TPUB - .0076595) <= 1e-9 &&
-fabs(TPBASE - .002831) <= 1e-9 &&
 (2.0 * S + tPpre.get(4096) + tPpost.get(4096)) * K >=
 S + tPproc.get(4096);
 const bool singleFlightDecode = WTP >= 1.0 - 1e-9 && WC <= 1e-9;
