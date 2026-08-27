@@ -4,6 +4,12 @@ Date: 2026-08-27. Baseline: `origin/main` `d202b1a` / blob
 `3317974884a412f8ab0deb84f544e77e89149ffa` / official **16041.088**.
 `solution.cpp` is that blob. **Do not submit.**
 
+**Superseded by `docs/akd56-kshrink-ident.md`:** the seed=711 fitted5
+below is k-shrink-IDENTICAL vs blob 7ef0c2f6 (do not throw out). A tighter
+#5 (bw=14 pp165) and an in-box identical #6 now exist. Re-tested STREAM
+on those honest recons **loses**. New FAT/CUT/SJFPRE levers tiny or loss.
+
+
 Gated `wEq(WTP,.80)||wEq(WTP,.90)` compile-time probes (now reverted). Gate
 proof: every variant DIFFERS on `.80/.90` fitted recons and is event-trace
 IDENTICAL on retargeted `.05/.15/.25/.30/.75/.98/.99/1.0`, #3 `lat-only-K4`,

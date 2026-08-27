@@ -23,9 +23,12 @@ for arg in sys.argv[2:]:
 
 
 def fitted5():
-    case = official5(seed=711, R=100, lout=96, pproc=160, span=15.0)
+    # k-shrink-identical official-matched #5 (bw=14 pp165). Old bw=8 pp160
+    # is also IDENTICAL vs 7ef0c2f6 but looser (+1.7/+1.6/+2.0).
+    case = official5(seed=711, R=100, lout=96, pproc=165, span=15.0,
+                     bw=14.0, lat=5.0)
     pin_official_constants(case, 5)
-    case.name = "fit5-R100-L96-pp160-sp15"
+    case.name = "canon5-R100-L96-pp165-bw14"
     return case
 
 
@@ -38,9 +41,11 @@ def fitted5b():
 
 
 def closest6():
-    case = official6(seed=812, R=130, lout=46, pproc=190, span=50.0)
+    # k-shrink-identical official-matched #6.
+    case = official6(seed=812, R=150, lout=36, pproc=160, span=4.0,
+                     bw=11.0, lat=4.4)
     pin_official_constants(case, 6)
-    case.name = "fit6-closest-pp190"
+    case.name = "canon6-R150-L36-pp160-bw11"
     return case
 
 

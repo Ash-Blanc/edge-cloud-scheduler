@@ -1,40 +1,41 @@
-NO SUBMIT — #5 in-box recon fitted; new levers no-gain
-=====================================================
+NO SUBMIT — k-shrink-identical #5/#6 recons exist; levers no-gain
+================================================================
 
 Main remains d202b1a / blob 3317974884a412f8ab0deb84f544e77e89149ffa
 Score 16041.088. Do not push main. Do not soup failed probes.
-solution.cpp unchanged (no PROBE).
+solution.cpp unchanged (no PROBE). hash-object 3317974884a412f8ab0deb84f544e77e89149ffa
 
-RECON FIT
-- #5 FITTED prefill-bound AND in-box: R=100 L_out=96 pproc=160 span=15
-  seed=711 lat=5. tp +1.7% tdr +1.6% tpot +2.0% need=10/8. Canonical
-  ranking recon (tests/akd56_new_lever_ab.py fitted5).
-- #6 NOT fitted. Default: tp+0.1 tdr+6.5 tpot+0.7 not-prefill. Closest
-  prefill: R130 L46 pp190 tdr +12%. Pareto only; do not rank on it.
-- pproc207 still disqualified (tdr +21%).
+FINGERPRINT (required): official k-shrink blob 7ef0c2f6 (5f4d787, SAT_TP
+wEq .80/.90, prefill floor) was bit-identical #5/#6 vs d202b1a. A ranking
+recon is valid only if that binary is event-identical here AND d202b1a
+tp/tdr/tpot match official within a few %, AND SAT_TP fires (LAT-bound
+default official5 DIFFERS: clouds 8→5, tp 1.14→1.37).
 
-NEW LEVERS on the in-box #5 (not BAN; gate proved):
-- HOLD/DRY/BIG admission: +0.0% tp, ≤+0.13 pts. Tiny.
-- FT1 first-token D PROC / CUT two-piece P PROC / AFTER post-first-token
-  D PROC prefer: 0 or loss.
-- COH L_out cohort lock (token-level, not two-wave): −38% tp. Kill.
-Do not ship. See docs/akd56-recon-fit.md.
+RECON: k-shrink-identical AND official-matched — EXISTS for both
+- #5 CANON official5(seed=711, R=100, lout=96, pproc=165, span=15, bw=14, lat=5)
+  tp=1.11967 (−0.12%) tdr=1498.32 (+0.07%) tpot=59.73 (−0.59%) need=16/8
+  IDENTICAL vs 7ef0c2f6. SAT_TP fires. fit=0.008
+- #5 also: old fitted5 bw=8 pp160 (+1.7/+1.6/+2.0) is NOT disqualified —
+  k-shrink is IDENTICAL on it. Decode-tail theory that “k-shrink would
+  still move tp” was false (prefill floor holds k=K; JSQ≡RR).
+- #6 CANON official6(seed=812, R=150, lout=36, pproc=160, span=4, bw=11, lat=4.4)
+  tp=0.69586 (−0.05%) tdr=3101.1 (−0.04%) tpot=57.24 (−1.00%) need>=K
+  IDENTICAL. fit=0.011. Alt: R165 L32 pp140 bw12 (tp −0.02% tdr −0.87% tpot −0.40%).
+- pproc207 IDENTICAL but tdr +21% — still not a ranking recon.
+- default official5/6 (need<K) DIFFERS — invalid for ranking.
 
-OFFICIAL NO-OPS / FLOORS (do not resubmit)
-- pairing .75 blob 0c00047f… LOST 16040.404. BAN.
-- k-shrink .80/.90 blob 7ef0c2f6… NO-OP 16041. BAN k-shrink-with-prefill-floor
-  on .25/.30/.80/.90.
-- k-shrink .30 blob 603e4d32… NO-OP 16041 #4 identical. Same k=K story.
-- tail-LPT .05/.15 blob d65f23ab… NO-OP 16041. BAN last-N LPT of that path.
-- #14 L_out=2 single-chain floor. #15/#17/#18 fitted floors. #12 tpotBound ≤6.
-- #13 ntp on LAT-bound recon: pairing fake, SJF tiny.
-- #10 edge SPT floor. Do not chase #9 (same publicTdrMode floor).
-- #8 uplink SPT floor.
-- #5/#6 STREAM/FIRE1/DPRE_FIRST/STEER/DPROC_OL/PART2 (prior round).
-- **#5/#6 HOLD/DRY/BIG/FT1/CUT/AFTER/COH (this round)** on a fully matched
-  prefill-bound recon. Tiny, identical, or COH −38% tp.
+NEW/RETESTED levers on the honest #5/#6 (wEq .80/.90, gate OK):
+- FAT D PRE-before-P-POST (min 1/8/16/32/64/80): #5 fat1 +0.30 pts / +0.1% tp
+  tiny; fat32+ IDENTICAL. #6 0 or −1 pt.
+- STREAM skip-ARR: #5 −14 pts −5% tp; #6 −79 pts nc slip. LOSS on honest recon.
+- FIRE1/SIZE cap: kill. CUT: −0.8 pts. SJF/LPT P PRE: loss. DPROC_PREF: ~0.
+- HOLD: +0.30 same as fat1. STICKY/combo/stream+fat: loss.
+Do not ship. Tiny is not shipped.
 
-16.8k BLOCKED. Need ~759 (16800−16041). Closed floors cannot supply it.
-#5+#6 remaining ~534+#610 is ntp vs decode-only tp_UB. Official is
-prefill-bound (k=K). #5 ranking recon is now in-box; every original lever
-on it this round was tiny, dead, or a token-loop loss.
+BAN addendum: STREAM/FIRE1/FAT/HOLD/CUT/SJFPRE/LPTPRE/DPROC_PREF on these
+k-shrink-identical recons. Still BAN pairing, k-shrink, PART2/two-wave,
+maximal-ready, COH, SIZE1, STEER, DPROC_OL.
+
+16.8k BLOCKED. Gap 759 (16800−16041). Honest #5+#6 recons exist; remaining
+ntp is prefill-bound k=K (official k-shrink no-op). Every original and new
+lever on them is tiny, identical, or a loss.
