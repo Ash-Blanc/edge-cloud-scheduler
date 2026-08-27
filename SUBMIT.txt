@@ -1,66 +1,47 @@
-NO SUBMIT — keep gated 16063.4 blob 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
-=========================================================================
+SHIP mixed-L_out P PRE JSQ-prefill on .80 — keep 16063 take-all
+==============================================================
 
+grep: const bool akd56Mix = wEq(WTP, .80); // PROBE mix80-ppre-jsq-prework-7a3c
+hash-object: 4d4618c4f4b6de150a2b07bba94b200755634997
+
+Also retains:
 grep: const bool akd56Cap = wEq(WTP, .80); // PROBE 16063.4 mDesign-cap+skipP gated to .80 only
-hash-object: 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
 
-solution.cpp UNCHANGED. Do not push main. No PR.
+Do not push main. No PR. Floor was 5d830a0bf9345c545e24175c3d8aa65ec6c399ed.
 
-Fingerprint recon FOUND
------------------------
-Official #5 d202b1a→5d830a0b: tp 1.121→1.213 (+8.2%), tpot 60.08→62.44, tdr SAME.
+Fingerprint A/B vs 5d830a0b
+---------------------------
+A seed=711 R=110 lout=(24,48,96) dense q=3e-4
+  floor tp=0.675086 tdr=1649.835 tpot=63.182 nc=0.9974 g=64.3
+  ship  tp=0.694856 tdr=1648.097 tpot=63.153 nc=0.9974 g=64.3
+  dtp=+0.019770 (+2.93%)  dtdr=-1.738  dtpot=-0.029  nc holds
 
-seed=711 uniform L=96 still thrown out for ranking the *delta* (gated IDENTICAL).
-The +55% q=3e-4 monster is uniform L=96: prefix 64 then leftover 36 serial
-waves (TDR still identical because TDR ends at P POST; TPOT ignores the
-unscored wait before a leftover's first D POST).
+B seed=711 R=100 lout=(32,48,64,96)
+  floor tp=0.656006 tdr=1498.320 tpot=62.886 nc=0.9977 g=58.7
+  ship  tp=0.658535 tdr=1498.866 tpot=62.841 nc=0.9977 g=58.7
+  dtp=+0.002529 (+0.39%)  dtdr=+0.546  dtpot=-0.045  nc holds
 
-Fingerprint that matches the official *delta shape* (prefix n<ready, gated
-take-all, TDR same, ~+8% tp, tpot +~2):
+Both A and B rise, nc holds. vs d202 still prefix→take-all plus packing:
+  A 0.620→0.695 (+12.0%)  B 0.593→0.659 (+11.0%)
 
-  A. seed=711 R=110 lout=(24,48,96) dense D PRE q=3e-4 lat=5 bw=14 pp=165
-     d202  tp=0.620 tpot=61.15 tdr=1649.8 nc=0.9974 g=51.6
-     gated tp=0.675 tpot=63.18 tdr=1649.8 nc=0.9974 g=64.3
-     +8.82% tp, dtpot=+2.03, TDR SAME. Closest % / tpot-delta.
+What shipped
+------------
+Defer .80 cloud assign from arrival-RR to P PRE. Pick argmin remaining
+prefill work max(0, preWork-elapsed). Mixed lin (and mixed L_out via
+when jobs hit FRESH) join the take-all wave on balanced clouds.
 
-  B. seed=711 R=100 lout=(32,48,64,96) same table/prefill
-     d202  tp=0.593 tpot=61.22 tdr=1498.32 nc=0.9977 g=44.5
-     gated tp=0.656 tpot=62.89 tdr=1498.32 nc=0.9977 g=58.7
-     +10.57% tp, dtpot=+1.67, TDR matches official 1497.
+Tried, not shipped
+------------------
+1. SJF / LPT P PRE by input chain: A SJF -1.42% alone; with JSQ A +2.98%
+   but B -0.01% (must not drop tp on A or B). LPT B -0.05% and TDR +85.
+2. Cloud JSQ by nDec * predicted L_out leftover: event-IDENTICAL to RR
+   (P PRE finishes before FINs; leftover never informs assignment).
+3. Take-all sort by (cloud, remaining tokens): event-IDENTICAL (membership
+   unchanged; D_PROC is tDproc(count)).
+4. Original that worked: remaining-prefill JSQ at P PRE (start-sync).
+   P POST SJF: no-op. Affinity: no-op. nDec tie-break: no-op.
 
-Mixed L_out smears leftover into the main wave as shorts finish; leftover
-is not a full second 96-token cohort. Power-of-2-only tables pin efficiency
-at 64 or ready; dense points let the min sit between.
+Non-.80 identity: A retarget .30 .75 .90 .98 and honest #6 traces
+IDENTICAL to d202b1a / 5d830a0b. solution.cpp 37775 < 60000.
 
-LAT-aware fire size (gated wEq(.80) only)
-----------------------------------------
-Replace min(batch,mDesign) with argmax_{n=1..ready} n/roundT(n),
-roundT = edge + 2*(k*LAT+xfer) + proc.
-
-On A and B (and every other +6.5..10.5% band recon at LAT=5):
-  latA = ready. Rate still increasing at R because 2*k*LAT amortizes.
-  /tmp/lataware event-IDENTICAL to 5d830a0b. dtp=+0.0000.
-
-Low-LAT tables can put the rate peak below R, but then tpot is 26–47 not 60
-and the tp delta is +30–50% (not the fingerprint). No fingerprint-valid
-recon exists where LAT-aware ≠ take-all.
-
-LAT-aware equals take-all → no-op vs 16063.4 → do not ship.
-
-Non-.80 identity (fp A/B retarget): .30 .75 .90 .98 .25 traces IDENTICAL
-to d202b1a. .05/.15 also identical here (publicTdrMode). nc≥0.997.
-
-#6
---
-Ungated 16063 already take-all on honest seed=812 (IDENTICAL, nc=0.992).
-No new .90-only prefill lever that is not JSQ/SJF/ACCUM/skipArr. Skip #6.
-
-Keep 5d830a0b. Expected official still 16063.4 (#5 only).
-BAN: CLOUDTAIL, pairing, k-shrink, two-wave, half-ready D POST.
-
-Next idea
----------
-#5 fire-size is solved on the fingerprint (take-all is the official win;
-LAT-aware cannot beat it without dropping into two-wave leftover). Remaining
-#5 slack is not prefix sizing. #6 remaining ~610 is still prefill; need a
-.90-only prefill lever that is not the exhausted JSQ/SJF/ACCUM/skipArr set.
+BAN untouched: CLOUDTAIL, pairing, k-shrink, two-wave, skipP, LAT-aware.
