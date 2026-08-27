@@ -96,17 +96,20 @@ def main():
     cases = sim.build_cases()
     for case in cases:
         sim.calibrate(case, "/tmp/ref_sequential")
-    checked = 0
+    checked = matched_mode = 0
     for case in cases:
         mode = abs(case.wtp - .5) <= 1e-6 and predicted_peak(case) > 1.0
-        if mode:
-            continue
-        expected = traced_run(baseline, case)
+        expected = traced_run(historical if mode else baseline, case)
         actual = traced_run(candidate, case)
         if actual != expected:
-            raise SystemExit(f"outside-mode mismatch: {case.name}")
-        checked += 1
-    print(f"outside mode: all {checked} traces match 1fd1caa")
+            lineage = "254398e" if mode else "1fd1caa"
+            raise SystemExit(f"{lineage} mismatch: {case.name}")
+        if mode:
+            matched_mode += 1
+        else:
+            checked += 1
+    print(f"in mode: all {matched_mode} suite traces match 254398e")
+    print(f"outside mode: all {checked} suite traces match 1fd1caa")
 
 
 if __name__ == "__main__":
