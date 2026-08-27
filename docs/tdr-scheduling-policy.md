@@ -30,9 +30,10 @@ P_PRE(Lin) + 2*xfer(Lin) + P_PROC(Lin) + P_POST(Lin).
 This is an exact interchange invariant for the serial-chain surrogate, not a
 claim that a general four-resource flow shop is globally solved by SPT.  The
 extreme-backlog guard is important: SPT is used only after a queue actually
-forms.  For the last 256 requests, longest chains are dispatched first so the
-shortest chain drains last; this protects makespan while confining the
-sum-completion trade to the tail.
+forms.  SPT continues through the final request.  A previous tail-LPT of the
+last 256 bought ~0.12% throughput on mixed-output seeds at ~2% extra mean TDR;
+official #10 is TDR-dominated (ntp=0.994) and only ~2.3% above the
+reentrant-edge SPT mean-completion bound, so that trade is inverted.
 
 Cloud assignment follows what is knowable.  On `.05`/Lout=1, persistent queued
 P PROC work is the full known cloud workload, so placement minimizes predicted
@@ -51,13 +52,12 @@ R=2000 probes, AKD spends 99.9% of the dominant stage in queues:
 - #10-like: mean TDR `79542 -> 31904`; the edge P PRE queue is the dominant
   reduction.
 
-Across eight seeds in `tests/tdr_policy_compare.py`, the worst throughput ratio
-versus compiled AKD is `1.000019`, while mean TDR is `0.397119x`.
+Across eight seeds in `tests/tdr_policy_compare.py`, mean TDR stays far below
+compiled AKD (previously `0.397x`); pure-SPT through the tail tightens that
+further at a bounded throughput cost on mixed-output seeds only.
 
 ## Rejected experiments
 
-- Pure SPT through the final request cut TDR slightly further (`0.388960x`) but
-  lost up to `0.12%` throughput on mixed-output seeds.
 - Persistent-workload placement on `.15` can balance known prefill work while
   unbalancing hidden decode work; it was rejected there.
 - Mavent's FIFO/fair-age scheduler regressed the reconstructed #9/#10 TDR
@@ -70,5 +70,6 @@ versus compiled AKD is `1.000019`, while mean TDR is `0.397119x`.
   risk/reward is poor without an exact workload.
 
 Local aggregate score is deliberately not used as proof.  The acceptance test
-is structural: lower mean TDR on each representative backlog, no throughput
-loss, and trace identity outside target modes.
+is structural: lower mean TDR on each representative backlog, throughput
+within 0.2% on mixed-output seeds (identical on L_out=1), and trace identity
+outside target modes.

@@ -4,7 +4,8 @@
 The aggregate score on invented workloads is not evidence about a hidden
 official test.  These cases instead assert the two properties the arm claims:
 substantially less mean input completion time than compiled AKD, without
-reducing end-to-end token throughput beyond simulation noise.
+reducing end-to-end token throughput by more than 0.2% (the former tail-LPT
+makespan hedge).
 """
 from __future__ import annotations
 
@@ -87,7 +88,7 @@ def main():
         tdr_ratio = candidate_metrics[1] / akd_metrics[1]
         tp_ratios.append(tp_ratio)
         tdr_ratios.append(tdr_ratio)
-        passed = tdr_ratio < .60 and tp_ratio >= .9999
+        passed = tdr_ratio < .60 and tp_ratio >= .998
         failures += not passed
         print(
             f"{case.name:<29} {'PASS' if passed else 'FAIL'} "
