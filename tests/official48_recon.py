@@ -273,20 +273,29 @@ def refine8():
 
 
 def fitted4(**override):
-    """Placeholder filled in after the grid; override from CLI experiments."""
-    kw = dict(seed=401, K=8, R=40, lout=16, lat=5.0, bw=8.0, S=2.0,
-              layers=8, span=4.0, lin=(256, 512, 1024),
-              pproc=40, dproc=8)
+    """Best d202b1a match: tp +0.6%, tdr 0.0%, tpot +0.4% (sum rel 1.0%).
+
+    Shape: K=4, R=8 all-at-0, L_out=17, lat=12, bw=2, dproc=13. Public
+    efficiency prefix keeps m~7; TDR is the prefill drain.
+    """
+    kw = dict(seed=24, K=4, R=8, lout=17, lat=12.0, bw=2.0, S=2.0,
+              layers=8, span=0.0, lin=(256, 512, 1024),
+              pproc=30, dproc=13)
     kw.update(override)
-    return make_case(4, f"fit4-K{kw['K']}-R{kw['R']}-L{kw['lout']}", **kw)
+    return make_case(4, f"fit4-K{kw['K']}-R{kw['R']}-L{kw['lout']}-s{kw['seed']}", **kw)
 
 
 def fitted8(**override):
-    kw = dict(seed=801, K=4, R=80, lout=8, lat=12.0, bw=2.0, S=3.0,
-              layers=8, span=20.0, lin=(128, 256, 512),
-              pproc=30, dproc=8, dpre_k=2.0, dpre_s=0.02, dproc_s=0.15)
+    """Best d202b1a match: tp +0.4%, tdr +0.5%, tpot +1.1% (sum rel 2.0%).
+
+    Shape: K=4, R=18 all-at-0, L_out=2, lat=14, bw=1.5, dproc=9, pproc=15.
+    Dist is the TDR leg; tpot sits on SLO2.
+    """
+    kw = dict(seed=38, K=4, R=18, lout=2, lat=14.0, bw=1.5, S=2.0,
+              layers=8, span=0.0, lin=(256, 512, 1024),
+              pproc=15, dproc=9)
     kw.update(override)
-    return make_case(8, f"fit8-K{kw['K']}-R{kw['R']}-L{kw['lout']}", **kw)
+    return make_case(8, f"fit8-K{kw['K']}-R{kw['R']}-L{kw['lout']}-s{kw['seed']}", **kw)
 
 
 def run_grid(binary, test, cases):

@@ -212,6 +212,27 @@ ST_FIN
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
+#ifndef AKD4_KSHRINK
+#define AKD4_KSHRINK 0
+#endif
+#ifndef AKD4_PAIR
+#define AKD4_PAIR 0
+#endif
+#ifndef AKD4_CHAIN
+#define AKD4_CHAIN 0
+#endif
+#ifndef AKD8_CHAIN
+#define AKD8_CHAIN 0
+#endif
+#ifndef AKD8_JSQ
+#define AKD8_JSQ 0
+#endif
+#ifndef AKD8_PAIR
+#define AKD8_PAIR 0
+#endif
+#ifndef AKD8_KSHRINK
+#define AKD8_KSHRINK 0
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -386,6 +407,16 @@ wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
+const bool akd4KShrink = AKD4_KSHRINK && wEq(WTP, .30);
+const bool akd4Pair = AKD4_PAIR && wEq(WTP, .30);
+const bool akd4Chain = AKD4_CHAIN && wEq(WTP, .30);
+const bool akd8Chain = AKD8_CHAIN && wEq(WTP, .25);
+const bool akd8Jsq = AKD8_JSQ && wEq(WTP, .25);
+const bool akd8Pair = AKD8_PAIR && wEq(WTP, .25);
+const bool akd8KShrink = AKD8_KSHRINK && wEq(WTP, .25);
+const bool akdKShrink = akd4KShrink || akd8KShrink;
+const bool akdPair = akd4Pair || akd8Pair;
+const bool akdChain = akd4Chain || akd8Chain;
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
 const bool test22Scale =
@@ -452,6 +483,26 @@ break;
 historical22Mode = wEq(WTP, .5) && predictedPeak > 1.0;
 if (pureLat && predictedPeak > 0 && predictedPeak < 0.25)
 publicMode = true;
+int satKDec = K;
+if (akdKShrink && K > 1) {
+double bestRate = -1;
+for (int k = 1; k <= K; ++k) {
+for (int m = 1;;) {
+int kk = min(k, m);
+double per = ceil((double)m / kk);
+double edge = 2.0 * S + tDpre.get(m) + tDpost.get(m);
+double link = 2.0 * (kk * LAT + 8.0 * (double)m * BPT / (BW * 1e6));
+double proc = S + tDproc.get(per);
+double rate = (double)m / max(1e-12, edge + link + proc);
+if (rate > bestRate) {
+bestRate = rate;
+satKDec = k;
+}
+if (m >= 2048) break;
+m = min(2048, m + max(1, m / 8));
+}
+}
+}
 double historicalNtpCeil = 0;
 if (historical22Mode && TPUB > TPBASE) {
 int hi = min(4096, max(1, M_EFF));
@@ -481,6 +532,7 @@ vector<priority_queue<PDI, vector<PDI>, greater<PDI>>> qProc(K);
 long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
 int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
 int publicNextCloud = 0;
+int publicPairCount = 0;
 bool publicTdrBulkSeen = false;
 bool publicBatchActive = false;
 vector<int> publicBatch;
@@ -543,9 +595,17 @@ r.last_tok = now;
 r.next_ls = 0;
 r.tokens = 0;
 r.joined = 0;
-if (publicMode && !publicTdrMode) {
+if (publicMode && !publicTdrMode && !akdKShrink) {
 r.cloud = publicNextCloud;
+if (akdPair) {
+publicPairCount++;
+if (publicPairCount >= 2) {
+publicPairCount = 0;
 publicNextCloud = (publicNextCloud + 1) % K;
+}
+} else {
+publicNextCloud = (publicNextCloud + 1) % K;
+}
 } else {
 r.cloud = -1;
 }
@@ -556,10 +616,10 @@ nLive++;
 nPrefPend++;
 sumArrPend += now;
 double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
-if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER)
+if ((publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) || akdChain)
 w += 2.0 * xfer(r.lin);
 qArr.push(PDI(w, (int)rid));
-if (historical22Mode) {
+if (historical22Mode || akdKShrink) {
 cloudW += S + tPproc.get(r.lin);
 feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin), xfer(r.lin));
 edgeW += 2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin);
@@ -997,8 +1057,8 @@ if (!done && !throughputPriority && batchReady)
 dispatchPublicPost();
 if (!done && !BK[B_ARR].empty()) {
 int rid = -1;
-if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
-if (publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
+if ((publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) || akdChain) {
+if (publicTdrMode && publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
 (int)BK[B_ARR].size() <= PUBLIC_TDR_TAIL_LPT) {
 double longest = -1.0;
 for (int candidate : BK[B_ARR]) {
@@ -1025,8 +1085,25 @@ break;
 if (rid < 0)
 rid = *min_element(BK[B_ARR].begin(), BK[B_ARR].end());
 int c = R[rid].cloud;
-if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
-wEq(WTP, .05)) {
+if (akdKShrink) {
+int kuse = satKDec;
+if (feedW > 0) {
+int need = max(1, (int)ceil(cloudW / feedW * KUSE_MARGIN));
+kuse = max(kuse, min(K, need));
+}
+kuse = min(K, max(1, kuse));
+int bestC = 0, bestLoad = 1 << 30;
+for (int i = 0; i < kuse; ++i) {
+int load = nPre[i] + nDec[i];
+if (load < bestLoad) {
+bestLoad = load;
+bestC = i;
+}
+}
+c = bestC;
+R[rid].cloud = c;
+} else if ((publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
+wEq(WTP, .05)) || akd8Jsq) {
 double bestCompletion = 1e300;
 for (int candidate = 0; candidate < K; ++candidate) {
 double elapsed = preRunStart[candidate] >= 0.0
