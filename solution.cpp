@@ -207,7 +207,7 @@ ST_FIN
 #define PUBLIC_TDR_POST_ORDER 1
 #endif
 #ifndef PUBLIC_TDR_TAIL_LPT
-#define PUBLIC_TDR_TAIL_LPT 256
+#define PUBLIC_TDR_TAIL_LPT 1
 #endif
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
@@ -954,6 +954,9 @@ break;
 }
 }
 const bool throughputPriority = WTP >= WC;
+const bool priorityDecodeReady =
+throughputPriority &&
+((int)BK[B_FRESH].size()+(int)BK[B_ACT].size() >= max(1,mDesign));
 auto dispatchPublicPost = [&]() {
 as("E D POST -1 ");
 ai((long long)publicBatch.size());
@@ -972,7 +975,7 @@ publicBatchActive = false;
 done = true;
 };
 if (throughputPriority && batchReady) dispatchPublicPost();
-if (!done && !BK[B_PPOST].empty()) {
+if (!done && (!throughputPriority || !priorityDecodeReady) && !BK[B_PPOST].empty()) {
 int rid = *min_element(BK[B_PPOST].begin(), BK[B_PPOST].end());
 if (publicTdrMode && PUBLIC_TDR_POST_ORDER) {
 rid = BK[B_PPOST][0];
@@ -995,7 +998,7 @@ done = true;
 }
 if (!done && !throughputPriority && batchReady)
 dispatchPublicPost();
-if (!done && !BK[B_ARR].empty()) {
+if (!done && (!throughputPriority || !priorityDecodeReady) && !BK[B_ARR].empty()) {
 int rid = -1;
 if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER) {
 if (publicTdrBulkSeen && PUBLIC_TDR_TAIL_LPT > 1 &&
@@ -1083,6 +1086,7 @@ bestEfficiency = efficiency;
 best = n;
 }
 }
+if (throughputPriority) best = min((int)batch.size(), max(1, mDesign));
 batch.resize(best);
 as("E D PRE -1 ");
 ai((long long)batch.size());
