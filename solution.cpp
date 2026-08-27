@@ -1252,6 +1252,8 @@ fire = (rD >= rP);
 }
 if (meanOpenGap > 8.0 * SLO2) fire = true;
 }
+if (historical22Mode && !fire && WC > 1e-9 &&
+meanOpenGap > 8.0 * SLO2) fire = true;
 }
 if (fire) {
 batch.clear();
