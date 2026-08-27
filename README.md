@@ -4,6 +4,13 @@ C++ interactive scheduler for [Codeforces 2251A](https://codeforces.com/contest/
 
 Submit `solution.cpp`.
 
+Current official score is **16041.088** at `d202b1a`
+(`git hash-object solution.cpp` =
+`3317974884a412f8ab0deb84f544e77e89149ffa`). Isolated AKD cohort-size and
+decode-balance probes on reconstructed #5/#6 did not beat that blob by
+enough to submit; #14 is already at the single-request L_out=2 floor. See
+`docs/akd-cohort-negative.md`.
+
 ## Baseline note: throughput-cohort-amortisation work reverted
 
 The throughput-cohort-amortisation / decode-staggering / `kuse` cloud-pool-sizing
