@@ -369,6 +369,7 @@ io::rdbl(WC);
 const bool publicMode = wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
+const bool publicPhaseSep = wEq(WTP, .80) || wEq(WTP, .90);
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
@@ -452,7 +453,7 @@ long long running = 0, xfers = 0, decDown = 0, decProcRun = 0;
 int decodeRoundsInFlight = 0, decodeFlightMembers = 0;
 int publicNextCloud = 0;
 bool publicTdrBulkSeen = false;
-bool publicBatchActive = false;
+bool publicBatchActive = false, publicDecodeStarted = false;
 vector<int> publicBatch;
 #ifdef SINGLE_FLIGHT_DEBUG
 long long debugSingleFlightRounds = 0;
@@ -814,6 +815,30 @@ mDesign = bestM;
 pipeStagger = true;
 }
 }
+bool publicPhaseReady = true;
+if (publicPhaseSep && !publicDecodeStarted) {
+int total = 0;
+double up = S + tDpre.get(max(1, nLive));
+vector<pair<double, int>> done;
+for (int c = 0; c < K; ++c) {
+int cnt = nPre[c] + nDec[c];
+total += cnt;
+if (cnt) {
+up += xfer(cnt);
+done.push_back({up + S + tDproc.get(cnt), c});
+}
+}
+sort(done.begin(), done.end());
+double down = 0;
+for (auto [finish, c] : done)
+down = max(down, finish) + xfer(nPre[c] + nDec[c]);
+double fullCycle = total == nLive
+? down + S + tDpost.get(max(1, nLive)) : 1e300;
+int ready = (int)BK[B_FRESH].size() + (int)BK[B_ACT].size();
+int need = K <= 8 ? (wEq(WTP, .90) ? 3 : 5) : 4;
+publicPhaseReady = fullCycle <= SLO2
+? nPrefPend == 0 : 8 * ready >= need * nLive;
+}
 int nAssigned = 0;
 ANS.clear();
 if (publicMode) {
@@ -936,7 +961,7 @@ running++;
 nAssigned++;
 done = true;
 }
-if (!done && !publicBatchActive) {
+if (!done && !publicBatchActive && publicPhaseReady) {
 batch.clear();
 for (int rid : BK[B_FRESH]) batch.push_back(rid);
 for (int rid : BK[B_ACT]) batch.push_back(rid);
@@ -976,6 +1001,7 @@ bmove(rid, -1);
 ac('\n');
 publicBatch = batch;
 publicBatchActive = true;
+publicDecodeStarted = true;
 nDecFlight += (int)batch.size();
 edgeFree = false;
 running++;
