@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Prove the best-of-official public port and its negative guard.
 
-At the eight selected weights (matched with 1e-6, matching the scheduler's
-wEq), plus the pure-latency #3 arm (WTP=0, WC=1, DBASE<2.5), the candidate
-must reproduce submission 387914886. On WTP=1, 0.67 and WTP=0 with DBASE>=2.5
-it must reproduce the current-main binary. A reconstructed sat5 case at
-WTP=0.80 / 0.98 must match public AND differ from the pre-public baseline;
-otherwise public dispatch is dead.
+At the selected public weights (except .80/.90), plus the pure-latency #3 arm
+(WTP=0, WC=1, DBASE<2.5), the candidate must reproduce submission 387914886.
+WTP=0.80 / 0.90 take a decode-kuse assignment that must differ from that
+public trace on a sat5 reconstruction without losing throughput. WTP=0.98
+must still equal public. On WTP=1, 0.67 and WTP=0 with DBASE>=2.5 it must
+reproduce the current-main binary.
 
 Usage: public_port_compare.py CANDIDATE PUBLIC CURRENT_MAIN [BASELINE]
 """
@@ -20,11 +20,16 @@ from trace_compare import traced_run
 
 
 TARGETS = (0.30, 0.80, 0.90, 0.25, 0.05, 0.15, 0.75, 0.98)
+SAT_TP_WEIGHTS = (0.80, 0.90)
 PROTECTED = (0.67, 1.0)
 
 
 def public_weight(weight):
     return any(abs(weight - target) <= 1e-6 for target in TARGETS)
+
+
+def sat_tp_weight(weight):
+    return any(abs(weight - target) <= 1e-6 for target in SAT_TP_WEIGHTS)
 
 
 def protected_weight(weight):
@@ -74,6 +79,9 @@ def main():
         if akd3_case(case):
             reference = public
             lineage = "public"
+        elif sat_tp_weight(case.wtp):
+            reference = None
+            lineage = "sattp"
         elif public_weight(case.wtp) and abs(case.wtp - 0.05) > 1e-6 and abs(case.wtp - 0.15) > 1e-6:
             reference = public
             lineage = "public"
@@ -112,9 +120,29 @@ def main():
                 f"CHECK  frames={actual_trace[1]} sha256={actual_trace[0][:12]}"
             )
 
-    # Mandatory: WTP=0.80 / 0.98 on a sat5 reconstruction must equal public
-    # 387914886 and must differ from the pre-public baseline. Matching
-    # baseline means publicMode never entered dispatch.
+    # Mandatory: WTP=0.80 on the official-calibrated #5 reconstruction must
+    # differ from public 387914886 (decode-kuse assignment is live). WTP=0.98
+    # on sat5-K8 must still equal public, proving the gate is exact .80/.90
+    # rather than a publicMode rewrite. Local sat5-K8 is prefill-bound so
+    # kuse stays at K and may match round-robin.
+    from akd3_guard_compare import official5
+    cal5 = official5()
+    pub_m, pub_t = traced_run(public, cal5)
+    cand_m, cand_t = traced_run(candidate, cal5)
+    differ = not (pub_m == cand_m and pub_t == cand_t)
+    print(
+        f"{cal5.name:<24} sat-tp vs public "
+        f"{'DIFFERS' if differ else 'IDENTICAL-DEAD'} "
+        f"cand={cand_t[0][:12]} pub={pub_t[0][:12]} "
+        f"tp {pub_m[0]:.4f}->{cand_m[0]:.4f}"
+    )
+    if not differ:
+        failures += 1
+        print("  ERROR: WTP=0.80 sat-tp path matches public; kuse is dead")
+    if cand_m[0] + 1e-9 < pub_m[0]:
+        failures += 1
+        print(f"  ERROR: WTP=0.80 lost throughput {pub_m[0]:.4f}->{cand_m[0]:.4f}")
+
     sat5 = next(case for case in cases if case.name == "sat5-K8")
     if abs(sat5.wtp - 0.80) > 1e-6:
         raise SystemExit("sat5-K8 is not a WTP=0.80 reconstruction")
@@ -122,32 +150,30 @@ def main():
     sat5_98.name = "sat5-K8-wtp0.98"
     sat5_98.wtp = 0.98
     sat5_98.wc = 0.02
-    proofs = [sat5, sat5_98]
 
-    for case in proofs:
-        pub_m, pub_t = traced_run(public, case)
-        cand_m, cand_t = traced_run(candidate, case)
-        pub_match = pub_m == cand_m and pub_t == cand_t
+    pub_m, pub_t = traced_run(public, sat5_98)
+    cand_m, cand_t = traced_run(candidate, sat5_98)
+    pub_match = pub_m == cand_m and pub_t == cand_t
+    print(
+        f"{sat5_98.name:<24} public-parity "
+        f"{'MATCH' if pub_match else 'MISMATCH'} "
+        f"cand={cand_t[0][:12]} pub={pub_t[0][:12]}"
+    )
+    if not pub_match:
+        failures += 1
+        print(f"  public  metrics={pub_m} trace={pub_t}")
+        print(f"  actual  metrics={cand_m} trace={cand_t}")
+    if baseline:
+        base_m, base_t = traced_run(baseline, sat5_98)
+        still_public = not (cand_m == base_m and cand_t == base_t)
         print(
-            f"{case.name:<24} public-parity "
-            f"{'MATCH' if pub_match else 'MISMATCH'} "
-            f"cand={cand_t[0][:12]} pub={pub_t[0][:12]}"
+            f"{sat5_98.name:<24} vs-baseline "
+            f"{'DIFFERS' if still_public else 'IDENTICAL-DEAD'} "
+            f"base={base_t[0][:12]}"
         )
-        if not pub_match:
+        if not still_public:
             failures += 1
-            print(f"  public  metrics={pub_m} trace={pub_t}")
-            print(f"  actual  metrics={cand_m} trace={cand_t}")
-        if baseline:
-            base_m, base_t = traced_run(baseline, case)
-            differ = not (cand_m == base_m and cand_t == base_t)
-            print(
-                f"{case.name:<24} vs-baseline "
-                f"{'DIFFERS' if differ else 'IDENTICAL-DEAD'} "
-                f"base={base_t[0][:12]}"
-            )
-            if not differ:
-                failures += 1
-                print("  ERROR: WTP public path matches baseline; publicMode is dead")
+            print("  ERROR: WTP=0.98 public path matches baseline; publicMode is dead")
 
     # Protected weights must stay on current-main even if nearby public targets
     # exist. test17 (0.67) is already in the loop; re-assert WTP=1.
@@ -167,7 +193,7 @@ def main():
     if failures:
         raise SystemExit(f"{failures} selected-lineage trace mismatch(es)")
     print(f"all {len(cases)} traces match their selected lineage")
-    print("WTP=0.80 and WTP=0.98 public-parity proof passed")
+    print("WTP=0.80 sat-tp trace-diff and WTP=0.98 public-parity proof passed")
 
 
 if __name__ == "__main__":

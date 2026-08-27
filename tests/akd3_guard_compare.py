@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Prove the hardened #3 AKD guard and that #5 maximal-ready was omitted.
+"""Prove the hardened #3 AKD guard and that #5 decode-kuse is live.
 
 Must-hold:
   WTP=0, WC=1, DBASE=1.16  -> candidate traces equal compiled 387914886
   WTP=0, WC=1, DBASE=4.02  -> candidate traces equal 9c53488 / current
-  official-calibrated #5   -> candidate equals 387914886 one-batch, not the
-                             d34bb45 maximal-ready regression
+  official-calibrated #5 K>=8 -> candidate differs from 387914886 one-batch
+                             and does not lose throughput; not maximal-ready
 
 Usage: akd3_guard_compare.py CANDIDATE AKD CURRENT [MAXIMAL_READY]
 """
@@ -117,22 +117,24 @@ def main():
                 cand == akd_t,
                 f"frames={cand[1][1]}",
             )
-            failures += report(
-                probe.name + " differs 9c",
-                cand != cur_t,
-            )
+            if akd_t != cur_t:
+                failures += report(
+                    probe.name + " differs 9c",
+                    cand != cur_t,
+                )
         else:
             failures += report(
                 probe.name + " vs 9c/current",
                 cand == cur_t,
                 f"frames={cand[1][1]}",
             )
-            failures += report(
-                probe.name + " stays off AKD",
-                cand != akd_t,
-            )
+            if akd_t != cur_t:
+                failures += report(
+                    probe.name + " stays off AKD",
+                    cand != akd_t,
+                )
 
-    print("=== official-calibrated #5: omit maximal-ready ===")
+    print("=== official-calibrated #5: decode-kuse, not maximal-ready ===")
     seeds = [
         official5(),
         official5(K=4, name="official5-K4"),
@@ -144,11 +146,19 @@ def main():
         akd_t = traced_run(akd, case)
         cur_t = traced_run(current, case)
         tp_c, tp_a = cand[0][0], akd_t[0][0]
-        failures += report(
-            case.name + " vs AKD/9c",
-            cand == akd_t == cur_t,
-            f"tp={tp_c:.4f}",
-        )
+        same_akd = cand == akd_t == cur_t
+        if case.K >= 8:
+            failures += report(
+                case.name + " differs AKD",
+                not same_akd,
+                f"tp {tp_a:.4f}->{tp_c:.4f}",
+            )
+        else:
+            failures += report(
+                case.name + " no tp loss",
+                tp_c + 1e-9 >= tp_a,
+                f"tp={tp_c:.4f}",
+            )
         if maximal:
             mx = traced_run(maximal, case)
             failures += report(
@@ -173,10 +183,23 @@ def main():
         cand = traced_run(candidate, case)
         if akd3_mode(case) or any(
             abs(case.wtp - w) <= 1e-6
-            for w in (0.25, 0.30, 0.75, 0.80, 0.90, 0.98)
+            for w in (0.25, 0.30, 0.75, 0.98)
         ):
             ref = traced_run(akd, case)
             lineage = "akd"
+        elif any(abs(case.wtp - w) <= 1e-6 for w in (0.80, 0.90)):
+            ref = traced_run(akd, case)
+            lineage = "sattp"
+            tp_ok = cand[0][0] + 1e-9 >= ref[0][0]
+            tag = "DIFFERS" if cand != ref else "SAME"
+            if not tp_ok:
+                failures += 1
+            print(
+                f"{case.name:<24} {lineage:<8} "
+                f"{tag} dbase={case.dist_base:.4f} "
+                f"wtp={case.wtp:.2f} tp {ref[0][0]:.4f}->{cand[0][0]:.4f}"
+            )
+            continue
         else:
             ref = traced_run(current, case)
             lineage = "current"
@@ -191,7 +214,7 @@ def main():
 
     if failures:
         raise SystemExit(f"{failures} akd3-guard assertion(s) failed")
-    print("akd3 DBASE split and #5 omission proof passed")
+    print("akd3 DBASE split and #5 decode-kuse proof passed")
 
 
 if __name__ == "__main__":

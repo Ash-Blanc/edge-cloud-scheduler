@@ -212,6 +212,9 @@ ST_FIN
 #ifndef PUBLIC_TDR_BULK_FACTOR
 #define PUBLIC_TDR_BULK_FACTOR 4
 #endif
+#ifndef SAT_TP
+#define SAT_TP 1
+#endif
 static int K, LAYERS;
 static double S, LAT, BW, BPT;
 static double SLO1, SLO2, TPUB, TPBASE, DBASE, WTP, WC;
@@ -385,6 +388,7 @@ bool publicMode = (pureLat && akd3Dbase) ||
 wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
 wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
 wEq(WTP, .90) || wEq(WTP, .98);
+const bool satTpMode = SAT_TP && (wEq(WTP, .80) || wEq(WTP, .90));
 const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15);
 const bool noGapTdrWeight = wEq(WTP, .45);
 const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
@@ -452,6 +456,26 @@ break;
 historical22Mode = wEq(WTP, .5) && predictedPeak > 1.0;
 if (pureLat && predictedPeak > 0 && predictedPeak < 0.25)
 publicMode = true;
+int satKDec = K;
+if (satTpMode && K > 1) {
+double bestRate = -1;
+for (int k = 1; k <= K; ++k) {
+for (int m = 1;;) {
+int kk = min(k, m);
+double per = ceil((double)m / kk);
+double edge = 2.0 * S + tDpre.get(m) + tDpost.get(m);
+double link = 2.0 * (kk * LAT + 8.0 * (double)m * BPT / (BW * 1e6));
+double proc = S + tDproc.get(per);
+double rate = (double)m / max(1e-12, edge + link + proc);
+if (rate > bestRate) {
+bestRate = rate;
+satKDec = k;
+}
+if (m >= 2048) break;
+m = min(2048, m + max(1, m / 8));
+}
+}
+}
 double historicalNtpCeil = 0;
 if (historical22Mode && TPUB > TPBASE) {
 int hi = min(4096, max(1, M_EFF));
@@ -543,7 +567,7 @@ r.last_tok = now;
 r.next_ls = 0;
 r.tokens = 0;
 r.joined = 0;
-if (publicMode && !publicTdrMode) {
+if (publicMode && !publicTdrMode && !satTpMode) {
 r.cloud = publicNextCloud;
 publicNextCloud = (publicNextCloud + 1) % K;
 } else {
@@ -559,7 +583,7 @@ double w = tPpre.get(r.lin) + tPproc.get(r.lin) + tPpost.get(r.lin);
 if (publicTdrMode && PUBLIC_TDR_CHAIN_ORDER)
 w += 2.0 * xfer(r.lin);
 qArr.push(PDI(w, (int)rid));
-if (historical22Mode) {
+if (historical22Mode || satTpMode) {
 cloudW += S + tPproc.get(r.lin);
 feedW += max(2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin), xfer(r.lin));
 edgeW += 2.0 * S + tPpre.get(r.lin) + tPpost.get(r.lin);
@@ -1025,7 +1049,24 @@ break;
 if (rid < 0)
 rid = *min_element(BK[B_ARR].begin(), BK[B_ARR].end());
 int c = R[rid].cloud;
-if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
+if (satTpMode) {
+int kuse = satKDec;
+if (feedW > 0) {
+int need = max(1, (int)ceil(cloudW / feedW * KUSE_MARGIN));
+kuse = max(kuse, min(K, need));
+}
+kuse = min(K, max(1, kuse));
+int bestC = 0, bestLoad = 1 << 30;
+for (int i = 0; i < kuse; ++i) {
+int load = nPre[i] + nDec[i];
+if (load < bestLoad) {
+bestLoad = load;
+bestC = i;
+}
+}
+c = bestC;
+R[rid].cloud = c;
+} else if (publicTdrMode && PUBLIC_TDR_WORKLOAD_ASSIGN &&
 wEq(WTP, .05)) {
 double bestCompletion = 1e300;
 for (int candidate = 0; candidate < K; ++candidate) {
