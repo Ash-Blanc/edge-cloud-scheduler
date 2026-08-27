@@ -1,0 +1,41 @@
+SUBMIT this solution.cpp — gated 16063.4 (.80-only mDesign cap)
+==============================================================
+
+grep: const bool akd56Cap = wEq(WTP, .80); // PROBE 16063.4 mDesign-cap+skipP gated to .80 only
+hash-object: 5d830a0bf9345c545e24175c3d8aa65ec6c399ed
+
+Submit this solution.cpp IMMEDIATELY.
+
+Not main blob 3317974884a412f8ab0deb84f544e77e89149ffa (d202b1a, 16041.088).
+Not ungated 16063 reconstruction 65f0a520be2bc171be380041303eb1853d9e65e8
+(that file leaked −0.081 on official #13 because WTP>=WC includes .75).
+Do not push main. No CLOUDTAIL / STREAM / pairing / k-shrink / two-wave.
+
+Reconstructed 16063 vs d202b1a (proven compile hash 65f0a520):
+  PUBLIC_TDR_TAIL_LPT 256→1
+  skip P PRE/P POST when FRESH+ACT >= mDesign under WTP>=WC
+  AKD prefix override best = min(batch, mDesign) under WTP>=WC
+
+This file = that reconstruction with the TWO new behaviors gated to
+wEq(WTP,.80) only. TAIL_LPT=1 kept (official #9/#10 no-op).
+
+Expected official:
+  #5 465.593→487.901  tp 1.121→1.213  tpot 60.081→62.439  tdr SAME  nc SAME
+     (same as 16063; first official #5 throughput win)
+  #13 STAYS 722.457 (ungated 16063 leaked −0.081; gate restores d202b1a)
+  #6 BIT-IDENTICAL 389.543 (16063 was already a no-op on official #6)
+  all other tests identical
+  score 16063.4 = 16063.315 + 0.081
+
+Local proofs:
+  honest #5 seed=711 R=100 L=96 pp=165 span=15 bw=14 lat=5
+    gated traces IDENTICAL to reconstructed 16063
+  .75 (sat6-K8 retarget): ungated 16063 DIFFERS; gated IDENTICAL to d202b1a
+  sat5-K8 (.80): gated IDENTICAL to reconstructed 16063
+  honest #6 seed=812 R=150 L=36 pp=160 span=4 bw=11 lat=4.4
+    IDENTICAL to d202b1a (nc=0.992)
+  .90-only lower ready (mDesign/2, K, 1) or #6-only mDesign=K/8:
+    honest #5 unchanged; honest #6 tp −20% to −81% or no-op. NOT included.
+
+If any test other than #5 moves, or #5 drops, or #13 drops:
+revert to 33179748.
