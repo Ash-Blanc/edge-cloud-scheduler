@@ -1516,6 +1516,10 @@ nAssigned++;
 }
 }
 }
+#ifdef HISTORICAL_TRACE
+fprintf(stderr, "frame=%.9f mode=%d mDesign=%d gAllow=%d tpot=%d tdr=%d\n",
+now, historical22Mode, mDesign, historicalGAllow, tpotBound, tdrBound);
+#endif
 io::oi(nAssigned);
 io::oc('\n');
 io::osn(ANS.data(), ANS.size());
