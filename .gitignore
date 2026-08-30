@@ -12,3 +12,5 @@ __pycache__/
 
 # Temp scratch
 *.tmp
+config.bat
+node_modules
