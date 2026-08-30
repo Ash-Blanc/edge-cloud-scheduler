@@ -48,7 +48,14 @@ def build(name):
 
 def run_traced(binary, c):
     """Re-implementation of sim.run that samples resource occupancy per frame."""
-    import resource
+    try:
+        import resource
+    except ImportError:
+        import types
+        _res = types.ModuleType("resource")
+        _res.RUSAGE_CHILDREN = 0
+        _res.getrusage = lambda who: types.SimpleNamespace(ru_utime=0.0, ru_stime=0.0)
+        resource = _res
     import subprocess
     s = sim.Sim(c)
     proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,

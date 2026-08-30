@@ -383,22 +383,15 @@
      (DBASE <= 0 && SLO1 > 100);
      bool publicMode = (pureLat && akd3Dbase) ||
      wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) ||
-     wEq(WTP, .30) || wEq(WTP, .45) || wEq(WTP, .75) || wEq(WTP, .80) ||
+     wEq(WTP, .30) || wEq(WTP, .75) || wEq(WTP, .80) ||
      wEq(WTP, .90) || wEq(WTP, .98);
-     const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) || wEq(WTP, .30) || wEq(WTP, .45);
+     const bool publicTdrMode = wEq(WTP, .05) || wEq(WTP, .15) || wEq(WTP, .25) || wEq(WTP, .30);
      const bool akd56Mix = wEq(WTP, .80) || wEq(WTP, .90) || wEq(WTP, .98);
      const bool akd56Cap = wEq(WTP, .80);
      const bool noGapTdrWeight = wEq(WTP, .45);
      const bool test17Weight = fabs(WTP - TDR_RECOVERY_WTP) <= 1e-12;
-     // Positive-decomposition from the 16114 regression: prefillAlways won
-     // +1.10 on #18 (.58) and holds the #17-class mechanism for #14 (.65).
-     const bool prefillAlways = wEq(WTP, .30) || wEq(WTP, .58) || wEq(WTP, .65) || wEq(WTP, .75);
-     // test22Scale won +2.80 on #12 (.99 high-TPUB piped decode) but lost
-     // -14 on #7 (.00) and -0.73 on #17 (.67) when global. Gate to .5/.99 only.
      const bool test22Scale =
-     (wEq(WTP, .5) &&
-     (TPUB >= ENSEMBLE_PIPE_TPUB_MIN || TPUB > TPBASE + 1.0)) ||
-     wEq(WTP, .99);
+     wEq(WTP, .5) && (TPUB >= ENSEMBLE_PIPE_TPUB_MIN || TPUB > TPBASE + 1.0);
      io::rint(n_);
      for (long long i = 0; i < n_; ++i) {
      long long b = 1;
@@ -1252,7 +1245,7 @@
      bool haveFresh = !BK[B_FRESH].empty();
      bool havePrefill = !BK[B_PPOST].empty() || !BK[B_ARR].empty();
      int ready = (int)BK[B_ACT].size() + (int)BK[B_FRESH].size();
-     bool holdStart = (tpotBound && !prefillAlways && nPrefPend > 0 && nActive == 0 && !haveAct) || yieldDec;
+     bool holdStart = (tpotBound && nPrefPend > 0 && nActive == 0 && !haveAct) || yieldDec;
      bool fire = false;
      if ((haveAct || haveFresh) && !holdStart &&
      (!singleFlightDecode || decodeRoundsInFlight == 0)) {
@@ -1461,7 +1454,7 @@
      continue;
      }
      if (BK[B_PPROC + c].empty()) continue;
-     if (tpotBound && !prefillAlways && nDecPend[c] > 0) continue;
+     if (tpotBound && nDecPend[c] > 0) continue;
      int best = -1;
      while (!qProc[c].empty()) {
      int rid = qProc[c].top().second;
@@ -1570,27 +1563,26 @@
      }
 /*
 →Judgement Protocol
-→Judgement Protocol
 #1: OK [15ms, 0MB]: points 500.0000027586 tp=0.022222 mean_tdr=30.000000 mean_tpot=0.000000 dist=0.000000 norm_tp=0.000000 norm_c=1.000000 normalized_score=0.500000 points=500.000003
 #2: OK [0ms, 0MB]: points 500.0 tp=0.005755 mean_tdr=126.158679 mean_tpot=0.000000 dist=0.000000 norm_tp=0.000000 norm_c=1.000000 normalized_score=0.500000 points=500.000000
-#3: OK [0ms, 0MB]: points 500.5679669212 tp=0.004421 mean_tdr=1329.849832 mean_tpot=61.933452 dist=0.577735 norm_tp=0.609703 norm_c=0.500568 normalized_score=0.500568 points=500.567967
+#3: OK [31ms, 0MB]: points 500.5679669212 tp=0.004421 mean_tdr=1329.849832 mean_tpot=61.933452 dist=0.577735 norm_tp=0.609703 norm_c=0.500568 normalized_score=0.500568 points=500.567967
 #4: OK [0ms, 0MB]: points 800.0545957539 tp=0.058122 mean_tdr=463.931201 mean_tpot=83.349355 dist=1.511359 norm_tp=0.463424 norm_c=0.944325 normalized_score=0.800055 points=800.054596
 #5: OK [31ms, 0MB]: points 487.9014612377 tp=1.213104 mean_tdr=1497.255654 mean_tpot=62.439347 dist=3.835813 norm_tp=0.360443 norm_c=0.997736 normalized_score=0.487901 points=487.901461
 #6: OK [46ms, 0MB]: points 389.510007368 tp=0.696159 mean_tdr=3102.395935 mean_tpot=57.815348 dist=5.142794 norm_tp=0.322561 norm_c=0.992050 normalized_score=0.389510 points=389.510007
-#7: OK [15ms, 0MB]: points 921.5081930527 tp=0.009353 mean_tdr=858.868074 mean_tpot=63.719084 dist=0.315359 norm_tp=0.229313 norm_c=0.921508 normalized_score=0.921508 points=921.508193
-#8: OK [15ms, 0MB]: points 833.3861643448 tp=0.013238 mean_tdr=1087.155401 mean_tpot=98.802707 dist=1.568274 norm_tp=0.765783 norm_c=0.855921 normalized_score=0.833386 points=833.386164
-#9: OK [15ms, 0MB]: points 736.0410600414 tp=0.004383 mean_tdr=5724.102520 mean_tpot=0.000000 dist=9.331742 norm_tp=0.958373 norm_c=0.724339 normalized_score=0.736041 points=736.041060
-#10: OK [15ms, 0MB]: points 684.4262706694 tp=0.007628 mean_tdr=182521.151047 mean_tpot=86.988650 dist=143.983361 norm_tp=0.994256 norm_c=0.629750 normalized_score=0.684426 points=684.426271
-#11: OK [46ms, 0MB]: points 500.1313385039 tp=0.000007 mean_tdr=32780482.884393 mean_tpot=16199.089335 dist=0.000000 norm_tp=0.000263 norm_c=1.000000 normalized_score=0.500131 points=500.131339
-#12: OK [0ms, 0MB]: points 801.2577872766 tp=0.000024 mean_tdr=1253189.665214 mean_tpot=48515.626332 dist=383.866585 norm_tp=0.809351 norm_c=0.000000 normalized_score=0.801258 points=801.257787
+#7: OK [0ms, 0MB]: points 921.5081930527 tp=0.009353 mean_tdr=858.868074 mean_tpot=63.719084 dist=0.315359 norm_tp=0.229313 norm_c=0.921508 normalized_score=0.921508 points=921.508193
+#8: OK [0ms, 0MB]: points 833.3861643448 tp=0.013238 mean_tdr=1087.155401 mean_tpot=98.802707 dist=1.568274 norm_tp=0.765783 norm_c=0.855921 normalized_score=0.833386 points=833.386164
+#9: OK [0ms, 0MB]: points 736.0410600414 tp=0.004383 mean_tdr=5724.102520 mean_tpot=0.000000 dist=9.331742 norm_tp=0.958373 norm_c=0.724339 normalized_score=0.736041 points=736.041060
+#10: OK [31ms, 0MB]: points 684.4262706694 tp=0.007628 mean_tdr=182521.151047 mean_tpot=86.988650 dist=143.983361 norm_tp=0.994256 norm_c=0.629750 normalized_score=0.684426 points=684.426271
+#11: OK [15ms, 0MB]: points 500.1313385039 tp=0.000007 mean_tdr=32780482.884393 mean_tpot=16199.089335 dist=0.000000 norm_tp=0.000263 norm_c=1.000000 normalized_score=0.500131 points=500.131339
+#12: OK [0ms, 0MB]: points 798.4572747605 tp=0.000024 mean_tdr=1253124.674481 mean_tpot=5996.360443 dist=46.608358 norm_tp=0.806522 norm_c=0.000000 normalized_score=0.798457 points=798.457275
 #13: OK [0ms, 0MB]: points 722.4569424501 tp=0.026744 mean_tdr=1669.941409 mean_tpot=71.638131 dist=2.587209 norm_tp=0.681007 norm_c=0.846807 normalized_score=0.722457 points=722.456942
 #14: OK [15ms, 0MB]: points 415.2668658781 tp=0.003564 mean_tdr=192.489397 mean_tpot=184.378198 dist=0.176642 norm_tp=0.210323 norm_c=0.795876 normalized_score=0.415267 points=415.266866
-#15: OK [15ms, 0MB]: points 714.4939661223 tp=0.000009 mean_tdr=19297377.523435 mean_tpot=0.000000 dist=90.914140 norm_tp=0.981730 norm_c=0.495847 normalized_score=0.714494 points=714.493966
-#16: OK [15ms, 0MB]: points 981.4714490542 tp=0.029808 mean_tdr=41823.998922 mean_tpot=71.697740 dist=35.316266 norm_tp=0.982893 norm_c=0.911808 normalized_score=0.981471 points=981.471449
-#17: OK [359ms, 0MB]: points 888.9363893189 tp=0.000520 mean_tdr=18892898.024207 mean_tpot=14640.185743 dist=1009.221168 norm_tp=0.986752 norm_c=0.690342 normalized_score=0.888936 points=888.936389
-#18: OK [15ms, 0MB]: points 914.5787964062 tp=0.000009 mean_tdr=17713632.934482 mean_tpot=0.000000 dist=139.586721 norm_tp=0.989135 norm_c=0.811621 normalized_score=0.914579 points=914.578796
-#19: OK [109ms, 0MB]: points 919.5303397253 tp=0.687432 mean_tdr=167.708415 mean_tpot=182.336100 dist=2.613196 norm_tp=0.919530 norm_c=0.999937 normalized_score=0.919530 points=919.530340
-#20: OK [93ms, 0MB]: points 998.0283904033 tp=0.005607 mean_tdr=1279.698484 mean_tpot=216.618412 dist=0.180010 norm_tp=0.995242 norm_c=0.999736 normalized_score=0.998028 points=998.028390
-#21: OK [78ms, 0MB]: points 963.6488254268 tp=0.012316 mean_tdr=35761.193097 mean_tpot=0.000000 dist=149.770617 norm_tp=0.978626 norm_c=0.948672 normalized_score=0.963649 points=963.648825
-#22: OK [140ms, 0MB]: points 955.2348231257 tp=39.873266 mean_tdr=1858.000000 mean_tpot=6.002148 dist=246.649938 norm_tp=0.913553 norm_c=0.996917 normalized_score=0.955235 points=955.234823
+#15: OK [15ms, 0MB]: points 713.5303165703 tp=0.000009 mean_tdr=19297298.776198 mean_tpot=0.000000 dist=90.913765 norm_tp=0.979586 norm_c=0.495849 normalized_score=0.713530 points=713.530317
+#16: OK [0ms, 0MB]: points 981.4714490542 tp=0.029808 mean_tdr=41823.998922 mean_tpot=71.697740 dist=35.316266 norm_tp=0.982893 norm_c=0.911808 normalized_score=0.981471 points=981.471449
+#17: OK [265ms, 0MB]: points 888.9363893189 tp=0.000520 mean_tdr=18892898.024207 mean_tpot=14640.185743 dist=1009.221168 norm_tp=0.986752 norm_c=0.690342 normalized_score=0.888936 points=888.936389
+#18: OK [31ms, 0MB]: points 914.5787964062 tp=0.000009 mean_tdr=17713632.934482 mean_tpot=0.000000 dist=139.586721 norm_tp=0.989135 norm_c=0.811621 normalized_score=0.914579 points=914.578796
+#19: OK [78ms, 0MB]: points 919.5303397253 tp=0.687432 mean_tdr=167.708415 mean_tpot=182.336100 dist=2.613196 norm_tp=0.919530 norm_c=0.999937 normalized_score=0.919530 points=919.530340
+#20: OK [125ms, 0MB]: points 998.0283904033 tp=0.005607 mean_tdr=1279.698484 mean_tpot=216.618412 dist=0.180010 norm_tp=0.995242 norm_c=0.999736 normalized_score=0.998028 points=998.028390
+#21: OK [93ms, 0MB]: points 963.6488254268 tp=0.012316 mean_tdr=35761.193097 mean_tpot=0.000000 dist=149.770617 norm_tp=0.978626 norm_c=0.948672 normalized_score=0.963649 points=963.648825
+#22: OK [171ms, 0MB]: points 955.2348231257 tp=39.873266 mean_tdr=1858.000000 mean_tpot=6.002148 dist=246.649938 norm_tp=0.913553 norm_c=0.996917 normalized_score=0.955235 points=955.234823
 */

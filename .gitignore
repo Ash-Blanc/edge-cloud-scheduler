@@ -1,5 +1,14 @@
-sched
+# Build artifacts
+*.exe
+*.out
 *.o
-a.out
+
+# IDE
+.idea/
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Temp scratch
+*.tmp

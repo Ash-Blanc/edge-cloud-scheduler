@@ -16,7 +16,14 @@ from __future__ import annotations
 import heapq
 import math
 import random
-import resource
+try:
+    import resource
+except ImportError:
+    import types
+    _res = types.ModuleType("resource")
+    _res.RUSAGE_CHILDREN = 0
+    _res.getrusage = lambda who: types.SimpleNamespace(ru_utime=0.0, ru_stime=0.0)
+    resource = _res
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -476,12 +483,20 @@ def make_case(name, seed, K, R, layers, span, wtp, a1, a2, kind="gpu",
     return c
 
 
-def calibrate(case: Case, ref_bin: str):
+def calibrate(case: Case, ref_bin: str = "/tmp/ref_sequential"):
     """Mirror the judge: measure the one-request-at-a-time reference, then set
     tp_base / dist_base from it. SLOs are placed as a fraction of the reference's
     own latency so dist_base lands in a range comparable to the real tests."""
     case.slo1, case.slo2 = 1e18, 1e18
     case.tp_base, case.tp_ub, case.dist_base = 0.0, 1.0, 0.0
+    import os
+    if not os.path.exists(ref_bin):
+        for cand in ["./ref_sequential.exe", "ref_sequential.exe", "./ref_sequential", "ref_sequential",
+                     os.path.join(os.path.dirname(__file__), "..", "ref_sequential.exe"),
+                     os.path.join(os.path.dirname(__file__), "..", "ref_sequential")]:
+            if os.path.exists(cand):
+                ref_bin = cand
+                break
     (tp, tdr, tpot), _, _ = run(ref_bin, case)
     case.ref = (tp, tdr, tpot)
     case.tp_base = tp
